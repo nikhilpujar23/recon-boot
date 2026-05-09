@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m pip install -e \".[dev]\" -q)",
+      "Bash(python3 -m pip install -e \".[dev]\" -q --break-system-packages)",
+      "Bash(python3 -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ --tb=short -q)",
+      "Bash(.venv/bin/pytest tests/ --tb=short -q)",
+      "Bash(.venv/bin/pip show *)",
+      "Bash(.venv/bin/pip list *)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/pytest tests/test_eval.py -v --tb=short)"
+    ]
+  }
+}

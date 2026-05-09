@@ -1,0 +1,67 @@
+id: "006_escalate"
+description: "Genuinely ambiguous case — agent escalates after exhausting tools"
+mode: agent
+
+case:
+  match_type: AMOUNT_MISMATCH
+  settlement_line_id: 3
+  pg_txn_id: null
+  confidence: null
+  notes:
+    reason: amount_mismatch
+    settlement_amount_paise: 500000
+    pg_amount_paise: 475000
+
+stubs:
+  search_pg_transactions:
+    - id: 9001
+      txn_id: "txn_003"
+      rrn: "888000000001"
+      utr: "AXIS0088888"
+      payer_vpa: "carol@okaxis"
+      payee_vpa: "vendor@okhdfcbank"
+      amount_paise: 475000
+      status: "PARTIAL_REVERSED"
+      created_at: "2026-04-30T11:00:00"
+  fetch_settlement_history_by_rrn:
+    - file_id: "udir_2026_04_30"
+      line_no: 300
+      rrn: "888000000001"
+      utr: "AXIS0088888"
+      amount_paise: 500000
+      status: "SUCCESS"
+      ingested_at: "2026-04-30T06:00:00"
+  lookup_pg_txns:
+    - id: 9001
+      txn_id: "txn_003"
+      rrn: "888000000001"
+      utr: "AXIS0088888"
+      payer_vpa: "carol@okaxis"
+      payee_vpa: "vendor@okhdfcbank"
+      amount_paise: 475000
+      status: "PARTIAL_REVERSED"
+      created_at: "2026-04-30T11:00:00"
+      updated_at: "2026-04-30T11:30:00"
+
+llm_script:
+  - call: search_pg_transactions
+    args:
+      rrn: "888000000001"
+  - call: get_chargeback_status
+    args:
+      rrn: "888000000001"
+  - call: get_settlement_history
+    args:
+      rrn: "888000000001"
+  - propose:
+      case_uid: "placeholder"
+      resolution_type: ESCALATE
+      confidence: 0.0
+      rationale: "Settlement shows 500000 paise but PG txn shows 475000 paise with PARTIAL_REVERSED status. The chargeback amount and the settlement discrepancy do not reconcile cleanly. Requires human review with access to acquiring bank records."
+
+expected:
+  resolution_type: ESCALATE
+  must_call_tools:
+    - search_pg_transactions
+    - get_chargeback_status
+  max_cost_usd: 0.01
