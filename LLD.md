@@ -807,3 +807,707 @@ Mocks: `Anthropic` client wrapped behind `LLMClient` interface; eval harness inj
 | Version | Date | Author | Notes |
 |---|---|---|---|
 | 1.0 | 2026-05-01 | Nikhil Pujar | Initial LLD derived from `doc.md` v1 |
+| 1.1 | 2026-05-09 | Nikhil Pujar | §19 RAG with pgvector — knowledge-grounded agent |
+
+---
+
+## 19. RAG with pgvector — Knowledge-Grounded Agent
+
+### 19.1 Motivation
+
+The agent currently investigates every case cold. A partial-reversal case resolved correctly last week (via two tool calls and a 0.96-confidence `proposeResolution`) is investigated from scratch today — same prompt tokens, same tool round-trips, same reasoning path. This has two costs: latency (tool calls on a known pattern) and accuracy risk (cold reasoning on edge cases that have stable precedent).
+
+RAG (Retrieval-Augmented Generation) with pgvector grounds the agent in historical outcomes:
+
+1. Every case that transitions to `APPROVED` or `AUTO_RESOLVED` is embedded as a structured text chunk and stored in a pgvector index.
+2. When a new case is opened for investigation, the top-*k* semantically closest resolved cases are retrieved and injected into the agent's context window before the first LLM call.
+3. The model reasons from precedent in addition to raw tool output.
+
+**Expected impact:**
+
+| Metric | Before RAG | Target with RAG |
+|---|---|---|
+| Avg tool calls per agent case | 2–4 | 1–2 (precedent short-circuits exploration) |
+| Confidence on recurring patterns | varies | ≥ 0.90 baseline |
+| Eval accuracy (agent cases) | baseline | +3–5 pp on partial-reversal + MDR-mismatch clusters |
+| Token cost per case | ~1 200 tokens | ~1 400 tokens (context injection overhead) |
+
+RAG does not change the agent's hard limits (max steps, timeout, exactly-one terminal call) or the PII boundary; retrieved content comes from already-redacted `agent_traces.steps` and `recon_cases.notes`.
+
+---
+
+### 19.2 Architecture Overview
+
+```
+── Indexing path (async, post-approval) ─────────────────────────────────
+CasesController.approve()
+    │ ApplicationEvent: CaseApprovedEvent(caseUid)
+    ▼
+CaseEmbeddingService.index(caseUid)
+    ├── fetch recon_cases + agent_traces
+    ├── build EmbeddingContent text
+    ├── AllMiniLmL6V2EmbeddingModel.embed(text)  [in-process, ~5 ms]
+    └── PgVectorEmbeddingStore.add(embedding, metadata)
+            └── INSERT INTO case_embeddings ...
+
+── Retrieval path (per investigation) ────────────────────────────────────
+AgentOrchestrator.investigate(caseUid)
+    │
+    ▼ AiServices (LangChain4j)
+    ├── embed(casePrompt) via AllMiniLmL6V2EmbeddingModel
+    ├── PgVectorEmbeddingStore.search(queryEmbedding, topK=3, minScore=0.75)
+    │       └── SELECT ... ORDER BY embedding <=> $1 LIMIT 3
+    ├── ContentRetriever formats results as "Similar resolved cases:\n..."
+    └── injected into context before system prompt reaches the LLM
+```
+
+**Kafka is not involved.** Indexing is triggered via Spring `ApplicationEvent` from the approval write path. The embedding store is a direct JDBC connection to Postgres — no new infrastructure component.
+
+---
+
+### 19.3 New Maven Module: `recon-rag`
+
+A dedicated module keeps the embedding/retrieval concern out of `recon-agent` and `recon-ledger`.
+
+**Module catalog addition:**
+
+| # | Module | Path | Owner of | Stateless? |
+|---|---|---|---|---|
+| 13 | RAG / Embedding | `recon-boot/recon-rag` | `case_embeddings`, embedding lifecycle | Yes |
+
+**`recon-rag/pom.xml` dependencies:**
+
+```xml
+<dependencies>
+  <dependency>
+    <groupId>com.recon</groupId>
+    <artifactId>recon-common</artifactId>
+  </dependency>
+  <dependency>
+    <groupId>com.recon</groupId>
+    <artifactId>recon-ledger</artifactId>
+  </dependency>
+
+  <!-- In-process embedding model (ONNX, no external API) -->
+  <dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>
+  </dependency>
+
+  <!-- pgvector EmbeddingStore -->
+  <dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-pgvector</artifactId>
+  </dependency>
+
+  <!-- LangChain4j core (ContentRetriever, TextSegment, Metadata) -->
+  <dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j</artifactId>
+  </dependency>
+
+  <dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-jdbc</artifactId>
+  </dependency>
+  <dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-test</artifactId>
+    <scope>test</scope>
+  </dependency>
+</dependencies>
+```
+
+**Parent `pom.xml` additions** (in `<dependencyManagement>`):
+
+```xml
+<dependency>
+  <groupId>dev.langchain4j</groupId>
+  <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>
+  <!-- version managed by langchain4j-bom -->
+</dependency>
+<dependency>
+  <groupId>dev.langchain4j</groupId>
+  <artifactId>langchain4j-pgvector</artifactId>
+</dependency>
+```
+
+`recon-agent/pom.xml` gains one new dependency:
+
+```xml
+<dependency>
+  <groupId>com.recon</groupId>
+  <artifactId>recon-rag</artifactId>
+</dependency>
+```
+
+---
+
+### 19.4 Database Additions
+
+#### 19.4.1 Migration `003_rag.sql`
+
+```sql
+-- Enable pgvector extension (requires Postgres 15+ or the pgvector package)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- One row per indexed case. Populated after APPROVED / AUTO_RESOLVED transition.
+CREATE TABLE case_embeddings (
+  id          BIGSERIAL PRIMARY KEY,
+  case_uid    UUID   UNIQUE NOT NULL REFERENCES recon_cases(case_uid) ON DELETE CASCADE,
+  match_type  TEXT   NOT NULL,
+  resolution  TEXT   NOT NULL,
+  content     TEXT   NOT NULL,          -- verbatim text that was embedded (for audit / re-index)
+  embedding   vector(384) NOT NULL,     -- AllMiniLmL6V2 output dimension
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+-- IVFFlat cosine index. lists=100 is appropriate for up to ~1 M vectors.
+-- Rebuild with REINDEX after bulk back-fill (§19.9).
+CREATE INDEX idx_ce_embedding
+    ON case_embeddings
+    USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+
+CREATE INDEX idx_ce_match_type ON case_embeddings(match_type);
+CREATE INDEX idx_ce_resolution  ON case_embeddings(resolution);
+```
+
+#### 19.4.2 Retention
+
+`case_embeddings` rows are permanent (soft-deleted via `ON DELETE CASCADE` when the parent `recon_case` is purged). Embeddings are cheap (384 × 4 bytes ≈ 1.5 KB/row). At 10k cases/day × 10% agent-resolved ≈ 1k new embeddings/day — ~365k rows/year, ~550 MB/year for the vector column alone.
+
+---
+
+### 19.5 Embedding Model
+
+**Choice:** `AllMiniLmL6V2EmbeddingModel` (LangChain4j artifact `langchain4j-embeddings-all-minilm-l6-v2`).
+
+| Property | Value |
+|---|---|
+| Output dimension | 384 |
+| Runtime | In-process JVM (ONNX Runtime via `langchain4j-onnx-embedding`) |
+| Latency | ~5 ms/embedding on ARM64 (CPU only) |
+| Cost | Zero — no external API call |
+| Memory | ~90 MB model weight loaded at startup |
+| Semantic quality | Sufficient for structured financial text (MRR ~0.72 on BEIR) |
+
+**Why not Cohere/OpenAI embeddings?** External API calls on the hot path add latency and cost. The reconciliation text vocabulary is narrow (RRN, UTR, amounts, match types, resolution types, agent rationale). A general-purpose sentence transformer captures the relevant similarity without needing a large multilingual model.
+
+**Alternative:** If eval shows the in-process model underperforms on Indian-language rationale text, swap to `langchain4j-cohere` (`embed-english-v3.0`, 1024-dim) — the interface is identical; only the dimension in the DDL changes (requires `DROP INDEX`, `ALTER TABLE`, `CREATE EXTENSION vector`, `REINDEX`).
+
+---
+
+### 19.6 Embedding Content Schema
+
+Each resolved case is serialised into a structured plain-text template before embedding. The template is deterministic; the same case always produces the same text, enabling re-indexing without embedding drift.
+
+**Template:**
+
+```
+match_type:{match_type}
+resolution:{resolution}
+confidence:{confidence}
+settlement_status:{settlement_status}
+settlement_amount_paise:{settlement_amount_paise}
+pg_status:{pg_status}
+pg_amount_paise:{pg_amount_paise}
+amount_delta_paise:{delta}
+tools_used:{comma-separated tool names from agent_traces}
+rationale:{redacted rationale from recon_cases.notes->>'rationale'}
+```
+
+**Example:**
+
+```
+match_type:AMOUNT_MISMATCH
+resolution:PROPOSED
+confidence:0.960
+settlement_status:SUCCESS
+settlement_amount_paise:150000
+pg_status:PARTIAL_REVERSED
+pg_amount_paise:100000
+amount_delta_paise:50000
+tools_used:get_chargeback_status,compute_fee_breakdown,propose_resolution
+rationale:Partial reversal of 500 confirmed via chargeback file; net matches settlement line after MDR adjustment
+```
+
+**PII note:** The rationale stored in `recon_cases.notes` has already been through `PiiRedactor.redact()` (§6.6, §19.13) before DB write. The embedding content is built from DB-resident data only; no raw identifiers reach the ONNX model.
+
+---
+
+### 19.7 Component Design
+
+#### 19.7.1 `CaseEmbeddingContent` (value object)
+
+```java
+package com.recon.rag;
+
+public record CaseEmbeddingContent(
+    String caseUid,
+    String matchType,
+    String resolution,
+    double confidence,
+    String text          // fully-rendered template (§19.6)
+) {}
+```
+
+#### 19.7.2 `CaseEmbeddingService`
+
+```java
+package com.recon.rag;
+
+@Service
+public class CaseEmbeddingService {
+
+    private final ReconCaseRepository   caseRepo;
+    private final AgentTraceRepository  traceRepo;
+    private final EmbeddingModel        embeddingModel;
+    private final EmbeddingStore        embeddingStore;
+
+    /** Build content text, embed, and upsert into pgvector. */
+    public void index(String caseUid) {
+        CaseEmbeddingContent content = buildContent(caseUid);
+
+        Embedding embedding = embeddingModel.embed(content.text()).content();
+
+        TextSegment segment = TextSegment.from(
+            content.text(),
+            Metadata.from(Map.of(
+                "case_uid",   content.caseUid(),
+                "match_type", content.matchType(),
+                "resolution", content.resolution(),
+                "confidence", String.valueOf(content.confidence())
+            ))
+        );
+
+        embeddingStore.add(embedding, segment);
+    }
+
+    private CaseEmbeddingContent buildContent(String caseUid) {
+        ReconCase rc = caseRepo.findByCaseUid(caseUid)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown case: " + caseUid));
+        Optional<AgentTrace> trace = traceRepo.findLatestByCaseUid(caseUid);
+
+        String toolsUsed = trace.map(t -> String.join(",", t.toolsUsed())).orElse("rules");
+        String rationale = Optional.ofNullable(rc.notes())
+                .map(n -> extractRationale(n))
+                .orElse("none");
+
+        String text = String.format("""
+                match_type:%s
+                resolution:%s
+                confidence:%.3f
+                settlement_status:%s
+                settlement_amount_paise:%d
+                pg_status:%s
+                pg_amount_paise:%d
+                amount_delta_paise:%d
+                tools_used:%s
+                rationale:%s
+                """,
+                rc.matchType(), rc.resolution(), rc.confidence().doubleValue(),
+                rc.settlementStatus(), rc.settlementAmountPaise(),
+                rc.pgStatus(), rc.pgAmountPaise(),
+                Math.abs(rc.settlementAmountPaise() - rc.pgAmountPaise()),
+                toolsUsed, rationale
+        );
+
+        return new CaseEmbeddingContent(caseUid, rc.matchType().name(),
+                rc.resolution().name(), rc.confidence().doubleValue(), text.strip());
+    }
+}
+```
+
+#### 19.7.3 `CaseApprovedEventListener`
+
+Listens for Spring `ApplicationEvent`s published by `CasesController.approve()` and `RulesEngine` auto-resolve path, then delegates to `CaseEmbeddingService` asynchronously.
+
+```java
+package com.recon.rag;
+
+@Component
+public class CaseApprovedEventListener {
+
+    private final CaseEmbeddingService embeddingService;
+    private final AppConfig            config;
+
+    @Async
+    @EventListener
+    public void onCaseApproved(CaseApprovedEvent event) {
+        if (!config.rag().enabled()) return;
+        try {
+            embeddingService.index(event.caseUid());
+        } catch (Exception e) {
+            // Non-fatal: embedding failure does not affect the approval write.
+            log.warn("Failed to index case_uid={} into RAG store", event.caseUid(), e);
+        }
+    }
+}
+```
+
+`CaseApprovedEvent` is a simple record published via `ApplicationEventPublisher.publishEvent(new CaseApprovedEvent(caseUid))` in both `CasesController.approve()` and `ReconCaseRepository.upsertAutoResolved()`.
+
+#### 19.7.4 `CaseEmbeddingIndexJob` (back-fill / gap-fill)
+
+A scheduled job handles cases missed by the event (service restarts, manual DB edits, historical back-fill).
+
+```java
+package com.recon.rag;
+
+@Component
+public class CaseEmbeddingIndexJob {
+
+    // Runs every 5 minutes. Picks up to 100 approved cases not yet in case_embeddings.
+    @Scheduled(fixedDelayString = "${recon.rag.index-job-interval-ms:300000}")
+    public void indexPendingCases() {
+        if (!config.rag().enabled()) return;
+        List<String> unindexed = jdbc.sql("""
+                SELECT rc.case_uid
+                FROM recon_cases rc
+                LEFT JOIN case_embeddings ce ON ce.case_uid = rc.case_uid
+                WHERE rc.resolution IN ('APPROVED', 'AUTO_RESOLVED')
+                  AND ce.case_uid IS NULL
+                ORDER BY rc.resolved_at DESC
+                LIMIT 100
+                """)
+                .query(String.class)
+                .list();
+
+        for (String uid : unindexed) {
+            embeddingService.index(uid);
+        }
+    }
+}
+```
+
+#### 19.7.5 `ReconContentRetriever`
+
+Wraps `PgVectorEmbeddingStore` as a LangChain4j `ContentRetriever`, filtering by `match_type` to narrow retrieval to structurally similar cases.
+
+```java
+package com.recon.rag;
+
+@Component
+public class ReconContentRetriever implements ContentRetriever {
+
+    private final EmbeddingModel  embeddingModel;
+    private final EmbeddingStore  embeddingStore;
+    private final AppConfig       config;
+
+    @Override
+    public List<Content> retrieve(Query query) {
+        if (!config.rag().enabled()) return List.of();
+
+        Embedding queryEmbedding = embeddingModel.embed(query.text()).content();
+
+        EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
+                .queryEmbedding(queryEmbedding)
+                .maxResults(config.rag().topK())
+                .minScore(config.rag().minScore())
+                .build();
+
+        return embeddingStore.search(request)
+                .matches()
+                .stream()
+                .map(m -> Content.from(formatMatch(m)))
+                .toList();
+    }
+
+    private String formatMatch(EmbeddingMatch<TextSegment> m) {
+        return String.format("--- Similar resolved case (score=%.2f) ---\n%s",
+                m.score(), m.embedded().text());
+    }
+}
+```
+
+#### 19.7.6 `RagConfig` — Spring configuration
+
+Added to `LangChainAgentConfig`:
+
+```java
+@Bean
+public EmbeddingModel embeddingModel() {
+    return new AllMiniLmL6V2EmbeddingModel();
+}
+
+@Bean
+public EmbeddingStore embeddingStore(DataSource dataSource) {
+    return PgVectorEmbeddingStore.builder()
+            .datasource(dataSource)
+            .table("case_embeddings")
+            .dimension(384)
+            .build();
+}
+
+// Wire ContentRetriever into the AiServices bean (existing reconInvestigateAgent bean)
+@Bean
+public ReconInvestigateAgent reconInvestigateAgent(
+        AnthropicChatModel anthropicChatModel,
+        SearchPgTransactionsTool searchTool,
+        GetChargebackStatusTool chargebackTool,
+        GetSettlementHistoryTool settlementTool,
+        ComputeFeeBreakdownTool feeTool,
+        ProposeResolutionTool proposeTool,
+        ReconContentRetriever contentRetriever) {
+    return AiServices.builder(ReconInvestigateAgent.class)
+            .chatLanguageModel(anthropicChatModel)
+            .tools(searchTool, chargebackTool, settlementTool, feeTool, proposeTool)
+            .contentRetriever(contentRetriever)
+            .build();
+}
+```
+
+When `config.rag().enabled()` is `false`, `ReconContentRetriever.retrieve()` returns an empty list; LangChain4j injects nothing and the agent behaves identically to the pre-RAG version.
+
+---
+
+### 19.8 Data Flow Diagrams
+
+#### 19.8.1 Indexing path
+
+```
+CasesController.approve(caseUid)
+  │
+  ├── tx: UPDATE recon_cases SET resolution='APPROVED' WHERE case_uid=$ AND resolution='PROPOSED'
+  ├── commit
+  │
+  └── publishEvent(CaseApprovedEvent)
+        │ (async, @Async — off the HTTP thread)
+        ▼
+      CaseApprovedEventListener.onCaseApproved()
+        ▼
+      CaseEmbeddingService.index(caseUid)
+        ├── SELECT recon_cases + agent_traces
+        ├── build content text (§19.6 template)
+        ├── AllMiniLmL6V2EmbeddingModel.embed(text)        ~5 ms
+        └── PgVectorEmbeddingStore.add(embedding, segment)
+              └── INSERT INTO case_embeddings(case_uid, match_type, resolution,
+                             content, embedding) VALUES (...)
+```
+
+#### 19.8.2 Retrieval path (per investigation call)
+
+```
+AgentOrchestrator.investigate(caseUid)
+  │
+  └── investigateAgent.investigate("Investigate reconciliation case: " + caseUid)
+        │  [inside LangChain4j AiServices]
+        │
+        ├── 1. ReconContentRetriever.retrieve(query)
+        │       ├── embed(query text)                      ~5 ms
+        │       └── SELECT FROM case_embeddings
+        │               ORDER BY embedding <=> $queryVec
+        │               LIMIT 3                            ~2 ms
+        │
+        ├── 2. Inject top-k results as extra context segments:
+        │       "Similar resolved cases:
+        │        --- Similar resolved case (score=0.91) ---
+        │        match_type:AMOUNT_MISMATCH
+        │        resolution:PROPOSED
+        │        confidence:0.960
+        │        ...rationale:Partial reversal confirmed..."
+        │
+        └── 3. LLM call (Anthropic) with augmented context
+                └── tool-call loop as before (§3)
+```
+
+---
+
+### 19.9 pgvector Index Strategy
+
+#### Index type selection
+
+| Index | Build time | Query time | Memory | Accuracy |
+|---|---|---|---|---|
+| **IVFFlat** (chosen) | Fast | ~2 ms @ 100k rows | Low | Approximate (tunable via `probes`) |
+| HNSW | Slow (minutes for bulk) | ~0.5 ms | High (~2× IVFFlat) | Higher |
+| Flat (no index) | None | ~50 ms @ 100k rows | None | Exact |
+
+**Decision:** IVFFlat with `lists=100`. At 365k rows/year the index stays accurate with `probes=10` (default). Upgrade to HNSW when row count exceeds ~2M and query latency SLO requires sub-1ms.
+
+#### Index parameters
+
+```sql
+-- At build time (after back-fill):
+SET ivfflat.probes = 10;  -- session-level, or set globally in postgresql.conf
+
+-- After large bulk back-fill, rebuild to recalculate cluster centroids:
+REINDEX INDEX CONCURRENTLY idx_ce_embedding;
+```
+
+#### Similarity metric
+
+`vector_cosine_ops` — cosine similarity is appropriate because the embedding content is sentence-level text; cosine is insensitive to embedding magnitude differences caused by variable content length.
+
+#### Filtered search
+
+LangChain4j's `PgVectorEmbeddingStore` supports metadata filters. The `ReconContentRetriever` may pass a `match_type` pre-filter to limit retrieval to structurally similar cases:
+
+```sql
+SELECT content, embedding <=> $1 AS distance
+FROM case_embeddings
+WHERE match_type = $2
+ORDER BY distance
+LIMIT $3;
+```
+
+This is optional (controlled by `recon.rag.filter-by-match-type`, default `true`); disabling it broadens retrieval at the cost of relevance.
+
+---
+
+### 19.10 Token Budget for Retrieved Context
+
+Each retrieved case text is ~200 tokens (template + rationale). With `topK=3`:
+
+| Component | Tokens |
+|---|---|
+| System prompt (cached) | ~700 |
+| Tool schemas (cached) | ~800 |
+| RAG context (3 cases × ~200) | ~600 |
+| User message (case prompt) | ~150 |
+| **Total input** | **~2 250** |
+
+This is ~1 050 tokens more than the pre-RAG baseline (~1 200). At Sonnet pricing (~$3/M input tokens), the overhead is ~$0.003 per case — within the $0.01/case SLO.
+
+Prompt caching applies to the system prompt and tool schemas (unchanged from §6.4). The RAG context changes per case and is not cached.
+
+---
+
+### 19.11 Configuration Additions
+
+New `AppConfig.Rag` record:
+
+```java
+public record Rag(
+    boolean enabled,           // feature flag; default true
+    int     topK,              // max retrieved cases; default 3
+    double  minScore,          // cosine similarity threshold; default 0.75
+    boolean filterByMatchType, // pre-filter pgvector query; default true
+    long    indexJobIntervalMs // back-fill job interval; default 300_000 (5 min)
+) {}
+```
+
+New environment variables:
+
+| Env | Default | Notes |
+|---|---|---|
+| `RAG_ENABLED` | `true` | Set `false` to disable retrieval without code change |
+| `RAG_TOP_K` | `3` | Max similar cases injected per investigation |
+| `RAG_MIN_SCORE` | `0.75` | Cosine similarity threshold; lower = more recall, noisier |
+| `RAG_FILTER_BY_MATCH_TYPE` | `true` | Restrict pgvector search to same match_type |
+| `RAG_INDEX_JOB_INTERVAL_MS` | `300000` | Back-fill job cadence in milliseconds |
+
+---
+
+### 19.12 Failure Modes
+
+| Failure | Detection | Action |
+|---|---|---|
+| `case_embeddings` table missing (migration not run) | `PgVectorEmbeddingStore` throws on first query | Startup health check queries `SELECT 1 FROM case_embeddings LIMIT 1`; fails fast with clear error |
+| `vector` extension not installed | `CREATE EXTENSION` fails in migration | Migration fails; Flyway blocks startup; operator installs extension and re-runs |
+| Embedding model fails to load (ONNX init error) | `AllMiniLmL6V2EmbeddingModel` constructor throws | App fails to start; check JVM memory (`-Xmx`) — model needs ~100 MB heap |
+| `CaseEmbeddingService.index()` throws | Caught in `CaseApprovedEventListener` | Logged as WARN; approval write already committed; `CaseEmbeddingIndexJob` will re-index within 5 minutes |
+| pgvector query timeout | `DataAccessException` in `ReconContentRetriever` | Returns empty list; agent proceeds without context (degraded but functional) |
+| Stale embedding (re-index after rationale correction) | Manual trigger or next job run | `UPSERT INTO case_embeddings ... ON CONFLICT (case_uid) DO UPDATE` replaces old embedding |
+| Low recall (no similar cases found) | `minScore` threshold filters all results | Agent proceeds cold; behaves identically to pre-RAG |
+| PII in retrieved content | Only post-redaction text is embedded (§19.6) | By construction; nightly PII audit (§6.6) now also scans `case_embeddings.content` |
+
+---
+
+### 19.13 Observability Additions
+
+#### New Prometheus metrics
+
+```
+# Number of embeddings in the store (updated by index job)
+rag_embeddings_total                                    # gauge
+
+# Rate of index operations
+rag_index_operations_total{status=success|failure}      # counter
+
+# Retrieval latency (pgvector query)
+rag_retrieval_duration_seconds                          # histogram
+
+# Retrieved context quality
+rag_retrieval_top_score                                 # histogram (per investigation)
+rag_retrieval_results_count                             # histogram (0–topK)
+
+# Back-fill job
+rag_index_job_pending_cases                             # gauge
+```
+
+#### New OTel span attributes
+
+Added to the existing `recon.agent.invest` span:
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `rag.enabled` | bool | Whether RAG context was injected |
+| `rag.retrieved_count` | int | Number of cases retrieved |
+| `rag.top_score` | double | Highest cosine similarity of retrieved cases |
+| `rag.retrieval_ms` | int | pgvector query duration |
+
+#### New alert
+
+| Alert | Rule | Severity |
+|---|---|---|
+| RagIndexLag | `rag_index_job_pending_cases > 500 for 15m` | warn |
+| RagRetrievalSlow | `histogram_quantile(0.99, rag_retrieval_duration_seconds) > 0.05` | warn |
+
+---
+
+### 19.14 Eval Harness Additions (§6.12)
+
+Two new eval dimensions:
+
+1. **RAG recall test** — for each golden agent case, assert that after indexing it, a semantically equivalent probe query retrieves it in the top-3 (cosine score ≥ 0.75). Measured by `RagRecallTest` in `recon-eval`.
+
+2. **Agent accuracy with RAG** — existing `EvalHarnessTest` gains a `rag_enabled` flag in YAML case files. Cases marked `rag_enabled: true` run with a pre-seeded `case_embeddings` table (populated by `EvalPgCaseEmbeddingRepository`). The regression gate checks that accuracy does not drop when RAG is enabled.
+
+New eval case field:
+
+```yaml
+rag_enabled: true
+similar_cases:
+  - match_type: AMOUNT_MISMATCH
+    resolution: PROPOSED
+    confidence: 0.96
+    rationale: "Partial reversal of 500 confirmed via chargeback file"
+```
+
+---
+
+### 19.15 Back-fill Plan for Existing Cases
+
+On first deploy of `003_rag.sql`:
+
+```sql
+-- Verify extension is installed
+SELECT * FROM pg_extension WHERE extname = 'vector';
+
+-- Confirm migration applied (case_embeddings exists and is empty)
+SELECT count(*) FROM case_embeddings;
+```
+
+Then trigger full back-fill via CLI:
+
+```bash
+# New sub-command added to recon-agent CLI
+recon rag backfill --since 2026-01-01 [--dry-run]
+```
+
+The CLI calls `CaseEmbeddingService.index()` for every APPROVED / AUTO_RESOLVED case in the date range. Recommended batch size: 500 cases/run to avoid ONNX heap pressure. After back-fill, `REINDEX INDEX CONCURRENTLY idx_ce_embedding` to rebuild cluster centroids with the full dataset.
+
+---
+
+### 19.16 Traceability to HLD Invariants
+
+| HLD Invariant | RAG Impact | LLD Enforcement |
+|---|---|---|
+| 1. Each line processed exactly once | Not affected | RAG is read-only on the investigation path |
+| 2. No raw PII to LLM | **Extended:** embedded content must also be PII-free | §19.6 content built from already-redacted DB fields; nightly audit extended to `case_embeddings.content` |
+| 3. Rules deterministic | Not affected | RAG operates after rules; rules remain pure functions |
+| 4. Agent decisions auditable | **Extended:** retrieved context logged | `rag.retrieved_count`, `rag.top_score` added to `agent_traces` span; retrieved UIDs stored in `agent_traces.steps` |
+| 5. Tolerates duplicate ingestion | Not affected | |
+| 6. DB-committed before Kafka emits | **RAG indexing is decoupled** | Indexing is async after commit; approval write does not wait for embedding — no outbox needed |
