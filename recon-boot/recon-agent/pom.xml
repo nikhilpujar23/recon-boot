@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.recon</groupId>
+    <artifactId>recon-boot</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>recon-agent</artifactId>
+  <name>recon-agent</name>
+  <description>LLM agent orchestrator: Haiku triage → Sonnet investigation, tool registry, event listener</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.recon</groupId>
+      <artifactId>recon-common</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.recon</groupId>
+      <artifactId>recon-ledger</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.recon</groupId>
+      <artifactId>recon-pii</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.recon</groupId>
+      <artifactId>recon-rag</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+    </dependency>
+    <!-- LangChain4j: core + Anthropic provider -->
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-anthropic</artifactId>
+    </dependency>
+    <!-- Jackson for JSON tool payloads and AnthropicRestClient (eval mock) -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!-- Spring web: RestClient still used by AnthropicRestClient (eval mock) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,68 @@
+spring:
+  application:
+    name: recon-boot
+  jmx:
+    enabled: false
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/recon}
+    username: ${DB_USER:recon}
+    password: ${DB_PASSWORD:recon}
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:5}
+      connection-timeout: 10000
+      initialization-fail-timeout: 60000
+      keepalive-time: 30000
+      connection-test-query: SELECT 1
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+recon:
+  agent:
+    model-triage: ${MODEL_TRIAGE:claude-haiku-4-5}
+    model-invest: ${MODEL_INVEST:claude-sonnet-4-6}
+    max-steps: ${AGENT_MAX_STEPS:6}
+    timeout-seconds: ${AGENT_TIMEOUT_S:30}
+    mock-llm: ${MOCK_LLM:true}
+  rules:
+    tolerance-paise: ${RULES_TOLERANCE_PAISE:1}
+  pii:
+    pan-hmac-key: ${PAN_HMAC_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+    pan-aes-key: ${PAN_AES_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  api:
+    bearer-token: ${API_BEARER_TOKEN:changeme}
+    rate-limit-rpm: 60
+  retry:
+    initial-seconds: ${RETRY_INITIAL_S:1.0}
+    max-attempts: ${RETRY_MAX_ATTEMPTS:3}
+    multiplier: 5.0
+    max-seconds: 25.0
+  rag:
+    enabled: ${RAG_ENABLED:true}
+    top-k: ${RAG_TOP_K:3}
+    min-score: ${RAG_MIN_SCORE:0.75}
+    filter-by-match-type: ${RAG_FILTER_BY_MATCH_TYPE:true}
+    index-job-interval-ms: ${RAG_INDEX_INTERVAL_MS:300000}
+  sftp:
+    host: ${SFTP_HOST:localhost}
+    port: ${SFTP_PORT:2222}
+    user: ${SFTP_USER:recon}
+    password: ${SFTP_PASSWORD:recon}
+    remote-dir: ${SFTP_REMOTE_DIR:/config/home/recon/upload}
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] [%X{requestId}] %-5level %logger{36} - %msg%n"

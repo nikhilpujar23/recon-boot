@@ -1,0 +1,381 @@
+# Autonomous Payment Reconciliation Agent — Docker Compose
+# LLD §15: OCI A1.Flex 4 OCPU / 24 GB ARM64 (also runs on x86_64 / Apple Silicon)
+#
+# Services:
+#   Infrastructure : postgres, sftp
+#   App workers    : outbox-drainer, ingest-worker, rules-worker
+#   API            : api
+#   Reverse proxy  : caddy
+#   Observability  : otel-collector, prometheus, grafana, tempo
+#
+# Quick start:
+#   cp .env.example .env          # fill in ANTHROPIC_API_KEY and PII keys
+#   docker compose up -d          # start everything
+#   docker compose exec postgres psql -U recon recon  # connect to DB
+#   docker compose logs -f ingest-worker rules-worker  # tail pipeline logs
+#
+# Drop a file into ./data/sftp/ and watch it flow through the pipeline.
+
+x-recon-common: &recon-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file: .env
+  environment:
+    DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    RAG_ENABLED: "false"
+    SFTP_HOST: sftp
+    SFTP_PORT: "2222"
+    JAVA_TOOL_OPTIONS: >-
+      -XX:+UseG1GC
+      -XX:MaxRAMPercentage=65.0
+      -XX:InitialRAMPercentage=30.0
+      -Dspring.main.web-application-type=none
+      -Dspring.main.lazy-initialization=true
+      -Dspring.jmx.enabled=false
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+  networks:
+    - recon
+
+services:
+
+  # ── Postgres ────────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    command: >
+      postgres
+        -c max_connections=200
+        -c shared_buffers=128MB
+    environment:
+      POSTGRES_USER: recon
+      POSTGRES_PASSWORD: recon
+      POSTGRES_DB: recon
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Schema is managed by Flyway in the Spring Boot app (recon-ledger/src/main/resources/db/migration).
+      # No need for docker-entrypoint-initdb.d scripts.
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U recon -d recon -c 'SELECT 1' > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    ports:
+      - "5432:5432"          # expose for local psql / GUI tools
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - recon
+
+  # ── SFTP server (settlement file drop zone) ─────────────────────────────────
+  # linuxserver/openssh-server: multi-arch (amd64 + arm64), listens on 2222
+  sftp:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+      USER_NAME: "recon"
+      USER_PASSWORD: "recon"
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "false"
+      LOG_STDOUT: "true"
+    volumes:
+      - sftp_data:/config/home/recon/upload
+    ports:
+      - "2222:2222"          # sftp -P 2222 recon@localhost
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - recon
+
+  # ── REST API ─────────────────────────────────────────────────────────────────
+  api:
+    <<: *recon-common
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_ENABLED: "false"
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=65.0
+        -XX:InitialRAMPercentage=30.0
+        -Dspring.main.lazy-initialization=true
+        -Dspring.jmx.enabled=false
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz | grep -q 'ok'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Outbox drainer ───────────────────────────────────────────────────────────
+  outbox-drainer:
+    <<: *recon-common
+    command: ["workers", "outbox"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_ENABLED: "false"
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=65.0
+        -XX:InitialRAMPercentage=30.0
+        -Dspring.main.web-application-type=none
+        -Dspring.main.lazy-initialization=true
+        -Dspring.jmx.enabled=false
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  # ── Ingest worker (files.new → parser → settlement_lines) ───────────────────
+  ingest-worker:
+    <<: *recon-common
+    command: ["workers", "ingest", "--watch-dir", "/data/sftp"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_ENABLED: "false"
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=65.0
+        -XX:InitialRAMPercentage=30.0
+        -Dspring.main.web-application-type=none
+        -Dspring.main.lazy-initialization=true
+        -Dspring.jmx.enabled=false
+    volumes:
+      - sftp_data:/data/sftp:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Rules worker (recon.requests → rules engine → recon_cases) ──────────────
+  rules-worker:
+    <<: *recon-common
+    command: ["workers", "rules"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_ENABLED: "false"
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=65.0
+        -XX:InitialRAMPercentage=30.0
+        -Dspring.main.web-application-type=none
+        -Dspring.main.lazy-initialization=true
+        -Dspring.jmx.enabled=false
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── SFTP watcher (watches /data/sftp, emits FileArrived) ────────────────────
+  sftp-watcher:
+    <<: *recon-common
+    command: ["workers", "watcher", "--watch-dir", "/data/sftp", "--spring.profiles.active=watcher"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_ENABLED: "false"
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=65.0
+        -XX:InitialRAMPercentage=30.0
+        -Dspring.main.web-application-type=none
+        -Dspring.main.lazy-initialization=true
+        -Dspring.jmx.enabled=false
+    volumes:
+      - sftp_data:/data/sftp:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  # ── Agent worker (investigate events → LLM investigation → recon_cases) ────────
+  agent-worker:
+    <<: *recon-common
+    command: ["workers", "agent", "--recon.rag.enabled=true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      RAG_ENABLED: "false"
+      SFTP_HOST: sftp
+      SFTP_PORT: "2222"
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+      JAVA_TOOL_OPTIONS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=65.0
+        -XX:InitialRAMPercentage=30.0
+        -Dspring.main.web-application-type=none
+        -Dspring.main.lazy-initialization=true
+        -Dspring.jmx.enabled=false
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Caddy (reverse proxy + TLS termination) ──────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - recon
+    # Caddy starts even if API isn't up yet; it will 502 until API is ready
+
+  # ── OTel Collector ───────────────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./infra/otel-collector/config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"          # OTLP gRPC
+      - "4318:4318"          # OTLP HTTP
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - recon
+
+  # ── Prometheus ───────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - recon
+
+  # ── Grafana ───────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - recon
+
+  # ── Tempo (distributed tracing backend) ─────────────────────────────────────
+  tempo:
+    image: grafana/tempo:2.4.2
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./infra/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"          # Tempo HTTP API (used by Grafana datasource)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - recon
+
+volumes:
+  postgres_data:
+  sftp_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:
+  tempo_data:
+
+networks:
+  recon:
+    driver: bridge

@@ -1,0 +1,56 @@
+# Workspace-level .gitignore for recon-boot
+# Built artifacts
+**/target/
+**/build/
+
+# Maven / Java
+*.class
+*.jar
+*.war
+*.ear
+.classpath
+.project
+.settings/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*~
+*.swp
+*.tmp
+*.log
+
+# Environment / secrets
+.env
+.env.*
+secrets.properties
+
+# Docker
+docker-compose.override.yml
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+claude/
+
+# Node
+node_modules/
+
+# pgvector / DB artifacts
+*.sql.gz
+
+# misc
+.idea_workspace
+.history/
+
+.iml
