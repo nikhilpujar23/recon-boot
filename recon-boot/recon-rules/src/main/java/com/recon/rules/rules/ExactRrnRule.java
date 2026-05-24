@@ -4,7 +4,6 @@ import com.recon.common.model.MatchType;
 import com.recon.common.model.PgTransaction;
 import com.recon.common.model.RuleMatch;
 import com.recon.common.model.SettlementLine;
-import com.recon.common.model.TxnStatus;
 import com.recon.ledger.repo.PgTransactionRepository;
 import com.recon.rules.engine.Rule;
 import org.springframework.core.annotation.Order;
@@ -30,7 +29,7 @@ public class ExactRrnRule implements Rule {
         Optional<PgTransaction> txnOpt = txnRepo.findByRrn(line.rrn());
         if (txnOpt.isEmpty()) return RuleMatch.noMatch();
         PgTransaction txn = txnOpt.get();
-        if (txn.status() == TxnStatus.SUCCESS && txn.amountPaise() == line.amountPaise()) {
+        if (statusesAgree(txn.status(), line.status()) && txn.amountPaise() == line.amountPaise()) {
             return RuleMatch.of(MatchType.EXACT, 1.0, txn.id());
         }
         return RuleMatch.noMatch();
