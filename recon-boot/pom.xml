@@ -23,7 +23,6 @@
     <module>recon-pii</module>
     <module>recon-ingest</module>
     <module>recon-rules</module>
-    <module>recon-rag</module>
     <module>recon-agent</module>
     <module>recon-api</module>
     <module>recon-obs</module>
@@ -45,7 +44,6 @@
     <opentelemetry.version>1.40.0</opentelemetry.version>
     <bouncycastle.version>1.78.1</bouncycastle.version>
     <langchain4j.version>0.36.2</langchain4j.version>
-    <allminilm.version>0.36.2</allminilm.version>
   </properties>
 
   <dependencyManagement>
@@ -113,20 +111,6 @@
         <version>${langchain4j.version}</version>
         <type>pom</type>
         <scope>import</scope>
-      </dependency>
-
-      <!-- In-process MiniLM embedding model (ONNX, no external API) -->
-      <dependency>
-        <groupId>dev.langchain4j</groupId>
-        <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>
-        <version>${allminilm.version}</version>
-      </dependency>
-
-      <!-- recon-rag internal module -->
-      <dependency>
-        <groupId>com.recon</groupId>
-        <artifactId>recon-rag</artifactId>
-        <version>${project.version}</version>
       </dependency>
 
       <!-- Testcontainers BOM -->

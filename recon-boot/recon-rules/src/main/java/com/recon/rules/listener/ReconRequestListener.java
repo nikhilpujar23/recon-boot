@@ -1,7 +1,6 @@
 package com.recon.rules.listener;
 
 import com.recon.common.event.CaseApprovedEvent;
-import com.recon.common.event.ReconInvestigateEvent;
 import com.recon.common.event.ReconRequestEvent;
 import com.recon.common.model.MatchType;
 import com.recon.common.model.RuleMatch;
@@ -69,8 +68,9 @@ public class ReconRequestListener {
                             caseUid, match.matchType(), match.confidence());
                 }
                 default -> {
+                    // upsertPending atomically writes a 'recon.investigate' outbox row;
+                    // agent-worker's InvestigateOutboxDrainer polls that row across the JVM boundary.
                     caseRepo.upsertPending(caseUid, line.id(), match.matchType());
-                    eventPublisher.publishEvent(new ReconInvestigateEvent(caseUid));
                     log.info("ROUTED_TO_AGENT case_uid={} match={}", caseUid, match.matchType());
                 }
             }

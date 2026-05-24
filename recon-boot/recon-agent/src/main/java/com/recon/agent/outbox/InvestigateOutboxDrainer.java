@@ -1,8 +1,8 @@
-package com.recon.ledger.outbox;
+package com.recon.agent.outbox;
 
-import com.recon.common.event.ReconRequestEvent;
+import com.recon.common.event.ReconInvestigateEvent;
 import com.recon.common.messaging.ProtoCodec;
-import com.recon.v1.ReconRequest;
+import com.recon.v1.ReconInvestigate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -15,20 +15,21 @@ import java.sql.ResultSet;
 import java.util.List;
 
 /**
- * Polls the outbox table and dispatches unpublished messages as Spring ApplicationEvents.
- * Runs every 500ms; marks published_at after successful dispatch.
- * Preserves at-least-once delivery: event publish happens before commit.
+ * Polls the outbox for 'recon.investigate' rows written by rules-worker and dispatches
+ * them as local Spring events so ReconInvestigateListener can invoke the LLM agent.
+ * Bridges the rules-worker → agent-worker JVM boundary via the shared DB outbox.
  */
 @Component
-public class OutboxDrainer {
+public class InvestigateOutboxDrainer {
 
-    private static final Logger log = LoggerFactory.getLogger(OutboxDrainer.class);
-    private static final int BATCH_SIZE = 100;
+    private static final Logger log = LoggerFactory.getLogger(InvestigateOutboxDrainer.class);
+    // 1 at a time: prevents thundering herd against Groq's 12k TPM free tier
+    private static final int BATCH_SIZE = 1;
 
     private final JdbcClient jdbc;
     private final ApplicationEventPublisher eventPublisher;
 
-    public OutboxDrainer(JdbcClient jdbc, ApplicationEventPublisher eventPublisher) {
+    public InvestigateOutboxDrainer(JdbcClient jdbc, ApplicationEventPublisher eventPublisher) {
         this.jdbc           = jdbc;
         this.eventPublisher = eventPublisher;
     }
@@ -37,9 +38,9 @@ public class OutboxDrainer {
     @Transactional
     public void drain() {
         List<OutboxRow> rows = jdbc.sql("""
-                SELECT id, topic, partition_key, payload
+                SELECT id, payload
                 FROM outbox
-                WHERE topic = 'recon.requests' AND published_at IS NULL
+                WHERE topic = 'recon.investigate' AND published_at IS NULL
                 ORDER BY id
                 LIMIT :limit
                 FOR UPDATE SKIP LOCKED
@@ -52,11 +53,10 @@ public class OutboxDrainer {
 
         for (OutboxRow row : rows) {
             try {
-                ReconRequest req = ProtoCodec.decode(row.payload(), ReconRequest.parser());
-                eventPublisher.publishEvent(
-                        new ReconRequestEvent(req.getCaseUid(), req.getFileId(), req.getLineNo()));
+                ReconInvestigate msg = ProtoCodec.decode(row.payload(), ReconInvestigate.parser());
+                eventPublisher.publishEvent(new ReconInvestigateEvent(msg.getCaseUid()));
             } catch (Exception e) {
-                log.error("Failed to dispatch outbox id={}", row.id(), e);
+                log.error("Failed to dispatch investigate outbox id={}", row.id(), e);
                 continue;
             }
             jdbc.sql("UPDATE outbox SET published_at = now() WHERE id = :id")
@@ -64,17 +64,12 @@ public class OutboxDrainer {
                     .update();
         }
 
-        log.debug("Drained {} outbox messages", rows.size());
+        log.debug("Drained {} investigate outbox messages", rows.size());
     }
 
     private OutboxRow mapRow(ResultSet rs, int rowNum) throws java.sql.SQLException {
-        return new OutboxRow(
-                rs.getLong("id"),
-                rs.getString("topic"),
-                rs.getString("partition_key"),
-                rs.getBytes("payload")
-        );
+        return new OutboxRow(rs.getLong("id"), rs.getBytes("payload"));
     }
 
-    record OutboxRow(long id, String topic, String partitionKey, byte[] payload) {}
+    record OutboxRow(long id, byte[] payload) {}
 }

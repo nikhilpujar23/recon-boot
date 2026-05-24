@@ -4,10 +4,9 @@ import com.recon.agent.service.ReconInvestigateAgent;
 import com.recon.agent.tools.*;
 import com.recon.common.config.AppConfig;
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.model.anthropic.AnthropicChatModel;
 import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.output.Response;
-import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.service.AiServices;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,22 +24,24 @@ public class LangChainAgentConfig {
 
     @Bean
     @ConditionalOnProperty(name = "recon.agent.mock-llm", havingValue = "false", matchIfMissing = true)
-    public ChatLanguageModel anthropicChatModel(
-            @Value("${ANTHROPIC_API_KEY}") String apiKey,
+    public ChatLanguageModel groqChatModel(
+            @Value("${GROQ_API_KEY}") String apiKey,
             AppConfig config) {
-        return AnthropicChatModel.builder()
+        return OpenAiChatModel.builder()
+                .baseUrl("https://api.groq.com/openai/v1")
                 .apiKey(apiKey)
                 .modelName(config.agent().modelInvest())
                 .maxTokens(1024)
+                .maxRetries(3)
                 .build();
     }
 
     @Bean
     @ConditionalOnProperty(name = "recon.agent.mock-llm", havingValue = "true")
     public ChatLanguageModel mockChatModel() {
-        log.warn("MOCK_LLM=true — agent will ESCALATE every case without calling Anthropic");
+        log.warn("MOCK_LLM=true — agent will ESCALATE every case without calling Groq");
         return messages -> Response.from(
-                AiMessage.from("[MOCK] Escalating: mock LLM enabled. Set MOCK_LLM=false and provide a real ANTHROPIC_API_KEY to investigate.")
+                AiMessage.from("[MOCK] Escalating: mock LLM enabled. Set MOCK_LLM=false and provide a real GROQ_API_KEY to investigate.")
         );
     }
 
@@ -51,12 +52,10 @@ public class LangChainAgentConfig {
             GetChargebackStatusTool chargebackTool,
             GetSettlementHistoryTool settlementTool,
             ComputeFeeBreakdownTool feeTool,
-            ProposeResolutionTool proposeTool,
-            ContentRetriever contentRetriever) {
+            ProposeResolutionTool proposeTool) {
         return AiServices.builder(ReconInvestigateAgent.class)
                 .chatLanguageModel(chatLanguageModel)
                 .tools(searchTool, chargebackTool, settlementTool, feeTool, proposeTool)
-                .contentRetriever(contentRetriever)
                 .build();
     }
 }

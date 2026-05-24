@@ -1,0 +1,58 @@
+id: "001_write_off"
+description: "1 paise amount mismatch resolved as WRITE_OFF — fee rounding artefact"
+mode: agent
+
+case:
+  match_type: AMOUNT_MISMATCH
+  settlement_line_id: 1
+  pg_txn_id: null
+  confidence: null
+  notes:
+    reason: amount_mismatch
+    settlement_amount_paise: 150000
+    pg_amount_paise: 149999
+
+stubs:
+  search_pg_transactions:
+    - id: 7711
+      txn_id: "txn_001"
+      rrn: "412345678901"
+      utr: "HDFC0001234"
+      payer_vpa: "alice@okhdfc"
+      payee_vpa: "merchant@okhdfcbank"
+      amount_paise: 149999
+      status: "SUCCESS"
+      created_at: "2026-04-30T10:00:00"
+  fetch_settlement_history_by_rrn:
+    - file_id: "udir_2026_04_30"
+      line_no: 10
+      rrn: "412345678901"
+      utr: "HDFC0001234"
+      amount_paise: 150000
+      fee_paise: 1350
+      net_paise: 148488
+      status: "SUCCESS"
+      ingested_at: "2026-04-30T06:00:00"
+  lookup_pg_txns: []
+
+llm_script:
+  - call: search_pg_transactions
+    args:
+      rrn: "412345678901"
+  - call: compute_fee_breakdown
+    args:
+      amount_paise: 149999
+      txn_type: "P2M"
+  - propose:
+      case_uid: "placeholder"
+      resolution_type: WRITE_OFF
+      confidence: 0.98
+      rationale: "Settlement shows 150000 paise, PG txn shows 149999 paise. Difference of 1 paise is within the MDR rounding threshold. No chargeback involved."
+      pg_txn_id: 7711
+
+expected:
+  resolution_type: WRITE_OFF
+  must_call_tools:
+    - search_pg_transactions
+    - compute_fee_breakdown
+  max_cost_usd: 0.01

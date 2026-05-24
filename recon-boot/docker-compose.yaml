@@ -9,7 +9,7 @@
 #   Observability  : otel-collector, prometheus, grafana, tempo
 #
 # Quick start:
-#   cp .env.example .env          # fill in ANTHROPIC_API_KEY and PII keys
+#   cp .env.example .env          # fill in GROQ_API_KEY and PII keys
 #   docker compose up -d          # start everything
 #   docker compose exec postgres psql -U recon recon  # connect to DB
 #   docker compose logs -f ingest-worker rules-worker  # tail pipeline logs
@@ -24,9 +24,12 @@ x-recon-common: &recon-common
   environment:
     DATABASE_URL: jdbc:postgresql://postgres:5432/recon
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-    RAG_ENABLED: "false"
     SFTP_HOST: sftp
     SFTP_PORT: "2222"
+    # Prevent stale connections after the long ONNX-model startup pause
+    SPRING_DATASOURCE_HIKARI_MAX_LIFETIME: "600000"        # 10 min (< PG idle timeout)
+    SPRING_DATASOURCE_HIKARI_KEEPALIVE_TIME: "60000"       # ping every 60s
+    SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: "30000"   # fail fast on acquire
     JAVA_TOOL_OPTIONS: >-
       -XX:+UseG1GC
       -XX:MaxRAMPercentage=65.0
@@ -45,7 +48,7 @@ services:
 
   # ── Postgres ────────────────────────────────────────────────────────────────
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     command: >
       postgres
         -c max_connections=200
@@ -103,7 +106,6 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/recon
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      RAG_ENABLED: "false"
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       JAVA_TOOL_OPTIONS: >-
@@ -137,7 +139,6 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/recon
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      RAG_ENABLED: "false"
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       SPRING_FLYWAY_ENABLED: "false"
@@ -166,7 +167,6 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/recon
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      RAG_ENABLED: "false"
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       SPRING_FLYWAY_ENABLED: "false"
@@ -197,7 +197,6 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/recon
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      RAG_ENABLED: "false"
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       SPRING_FLYWAY_ENABLED: "false"
@@ -226,7 +225,6 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/recon
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      RAG_ENABLED: "false"
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       SPRING_FLYWAY_ENABLED: "false"
@@ -248,7 +246,7 @@ services:
   # ── Agent worker (investigate events → LLM investigation → recon_cases) ────────
   agent-worker:
     <<: *recon-common
-    command: ["workers", "agent", "--recon.rag.enabled=true"]
+    command: ["workers", "agent"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -257,7 +255,6 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/recon
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      RAG_ENABLED: "false"
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       SPRING_FLYWAY_ENABLED: "false"

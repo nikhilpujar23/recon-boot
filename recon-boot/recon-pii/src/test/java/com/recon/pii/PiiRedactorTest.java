@@ -23,8 +23,7 @@ class PiiRedactorTest {
                 new AppConfig.Rules(1),
                 piiConfig,
                 new AppConfig.Api("test-token", 60),
-                new AppConfig.Retry(1.0, 3, 5.0, 25.0),
-                AppConfig.Rag.defaults()
+                new AppConfig.Retry(1.0, 3, 5.0, 25.0)
         );
         HmacTokenizer hmac = new HmacTokenizer(config);
         redactor = new PiiRedactor(hmac);

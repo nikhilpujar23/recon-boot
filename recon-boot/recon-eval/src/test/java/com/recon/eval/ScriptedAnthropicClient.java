@@ -1,7 +1,7 @@
 package com.recon.eval;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.recon.agent.client.AnthropicRestClient;
+import com.recon.agent.client.GroqRestClient;
 
 import java.util.*;
 
@@ -14,7 +14,7 @@ import java.util.*;
  *
  * After the script is exhausted, returns end_turn with no content.
  */
-class ScriptedAnthropicClient extends AnthropicRestClient {
+class ScriptedAnthropicClient extends GroqRestClient {
 
     private final Deque<Map<String, Object>> steps;
     private final List<String> toolsInvoked = new ArrayList<>();
@@ -63,7 +63,6 @@ class ScriptedAnthropicClient extends AnthropicRestClient {
                     null,
                     proposeInput
             );
-            // After propose, clear steps so the loop stops
             steps.clear();
             return new MessagesResponse("tool_use", List.of(block), new Usage(200, 100, 0, 0));
         }

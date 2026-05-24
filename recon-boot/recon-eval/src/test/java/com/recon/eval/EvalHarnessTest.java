@@ -2,9 +2,9 @@ package com.recon.eval;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import com.recon.agent.client.AnthropicRestClient.ContentBlock;
-import com.recon.agent.client.AnthropicRestClient.MessagesRequest;
-import com.recon.agent.client.AnthropicRestClient.MessagesResponse;
+import com.recon.agent.client.GroqRestClient.ContentBlock;
+import com.recon.agent.client.GroqRestClient.MessagesRequest;
+import com.recon.agent.client.GroqRestClient.MessagesResponse;
 import com.recon.common.config.AppConfig;
 import com.recon.common.model.*;
 import com.recon.rules.engine.Rule;
@@ -46,8 +46,7 @@ class EvalHarnessTest {
                 new AppConfig.Rules(1L),
                 new AppConfig.Pii("", ""),
                 new AppConfig.Api("changeme", 60),
-                new AppConfig.Retry(1.0, 3, 5.0, 25.0),
-                new AppConfig.Rag(false, 3, 0.75, true, 300_000L)
+                new AppConfig.Retry(1.0, 3, 5.0, 25.0)
         );
     }
 

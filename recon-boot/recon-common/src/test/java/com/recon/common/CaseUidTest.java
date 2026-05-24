@@ -31,7 +31,7 @@ class CaseUidTest {
     @Test
     void uidIsHexStringOf32Chars() {
         String uid = CaseUid.of("FILE_ABCDEF123456", 1);
-        assertEquals(32, uid.length(), "UUID without dashes = 32 hex chars");
-        assertTrue(uid.matches("[0-9a-f]{32}"), "Must be lowercase hex");
+        assertEquals(36, uid.length(), "UUID with dashes = 36 chars");
+        assertTrue(uid.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"), "Must be standard UUID format");
     }
 }

@@ -8,8 +8,7 @@ public record AppConfig(
         Rules rules,
         Pii pii,
         Api api,
-        Retry retry,
-        Rag rag
+        Retry retry
 ) {
     public record Agent(
             String modelTriage,
@@ -40,15 +39,4 @@ public record AppConfig(
             double maxSeconds
     ) {}
 
-    public record Rag(
-            boolean enabled,
-            int topK,
-            double minScore,
-            boolean filterByMatchType,
-            long indexJobIntervalMs
-    ) {
-        public static Rag defaults() {
-            return new Rag(true, 3, 0.75, true, 300_000L);
-        }
-    }
 }

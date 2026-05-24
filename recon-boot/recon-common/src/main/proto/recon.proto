@@ -21,6 +21,13 @@ message ReconRequest {
   string case_uid = 3;  // hex of UUID-5(file_id:line_no)
 }
 
+// Emitted by rules-worker when a case is routed to the LLM agent.
+// Persisted in outbox (topic = 'recon.investigate', schema_id = 3)
+// so agent-worker can poll it across the JVM boundary.
+message ReconInvestigate {
+  string case_uid = 1;
+}
+
 // Written back to Kafka after rules/agent resolution (Phase 2).
 message ReconResult {
   string case_uid       = 1;

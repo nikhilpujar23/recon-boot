@@ -68,7 +68,13 @@ public class AgentOrchestrator {
     }
 
     private void escalate(String caseUid, String reason) {
-        String notes = "{\"escalation_reason\":\"" + reason.replace("\"", "'") + "\"}";
+        String safe = reason
+                .replace("\\", "\\\\")
+                .replace("\"", "'")
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("\t", " ");
+        String notes = "{\"escalation_reason\":\"" + safe + "\"}";
         caseRepo.proposeResolution(caseUid, Resolution.ESCALATE,
                 BigDecimal.ZERO, "agent", null, notes);
     }

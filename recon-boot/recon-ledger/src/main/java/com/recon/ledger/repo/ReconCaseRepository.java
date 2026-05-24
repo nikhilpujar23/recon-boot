@@ -1,8 +1,10 @@
 package com.recon.ledger.repo;
 
+import com.recon.common.messaging.ProtoCodec;
 import com.recon.common.model.MatchType;
 import com.recon.common.model.ReconCase;
 import com.recon.common.model.Resolution;
+import com.recon.v1.ReconInvestigate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,7 +45,7 @@ public class ReconCaseRepository {
 
     @Transactional
     public void upsertPending(String caseUid, long settlementLineId, MatchType matchType) {
-        jdbc.sql("""
+        int inserted = jdbc.sql("""
                 INSERT INTO recon_cases
                     (case_uid, settlement_line, match_type, resolution)
                 VALUES (:uid, :slId, :matchType, 'PENDING')
@@ -53,10 +55,25 @@ public class ReconCaseRepository {
                 .param("slId", settlementLineId)
                 .param("matchType", matchType.name())
                 .update();
+
+        // Atomically write the investigate outbox entry so agent-worker can poll
+        // it across the JVM boundary. Only written when the case is new (inserted > 0)
+        // to preserve idempotency on replay.
+        if (inserted > 0) {
+            byte[] payload = ProtoCodec.encode(
+                    ReconInvestigate.newBuilder().setCaseUid(caseUid).build());
+            jdbc.sql("""
+                    INSERT INTO outbox (topic, partition_key, payload, schema_id)
+                    VALUES ('recon.investigate', :key, :payload, 3)
+                    """)
+                    .param("key", caseUid)
+                    .param("payload", payload)
+                    .update();
+        }
     }
 
     /**
-     * Agent write guard: only updates if resolution IS NULL (prevents stale writes).
+     * Agent write guard: only updates if resolution IS PENDING (prevents stale writes).
      * Returns true if the row was updated.
      */
     @Transactional
@@ -70,7 +87,7 @@ public class ReconCaseRepository {
                     pg_transaction = :txnId,
                     notes = CAST(:notes AS jsonb),
                     resolved_at = now()
-                WHERE case_uid = :uid AND resolution IS NULL
+                WHERE case_uid = :uid AND resolution = 'PENDING'
                 """)
                 .param("resolution", resolution.name())
                 .param("confidence", confidence)

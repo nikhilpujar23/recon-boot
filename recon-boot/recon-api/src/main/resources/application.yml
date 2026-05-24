@@ -32,8 +32,8 @@ management:
 
 recon:
   agent:
-    model-triage: ${MODEL_TRIAGE:claude-haiku-4-5}
-    model-invest: ${MODEL_INVEST:claude-sonnet-4-6}
+    model-triage: ${MODEL_TRIAGE:llama-3.1-8b-instant}
+    model-invest: ${MODEL_INVEST:llama-3.3-70b-versatile}
     max-steps: ${AGENT_MAX_STEPS:6}
     timeout-seconds: ${AGENT_TIMEOUT_S:30}
     mock-llm: ${MOCK_LLM:true}
@@ -50,12 +50,6 @@ recon:
     max-attempts: ${RETRY_MAX_ATTEMPTS:3}
     multiplier: 5.0
     max-seconds: 25.0
-  rag:
-    enabled: ${RAG_ENABLED:true}
-    top-k: ${RAG_TOP_K:3}
-    min-score: ${RAG_MIN_SCORE:0.75}
-    filter-by-match-type: ${RAG_FILTER_BY_MATCH_TYPE:true}
-    index-job-interval-ms: ${RAG_INDEX_INTERVAL_MS:300000}
   sftp:
     host: ${SFTP_HOST:localhost}
     port: ${SFTP_PORT:2222}
