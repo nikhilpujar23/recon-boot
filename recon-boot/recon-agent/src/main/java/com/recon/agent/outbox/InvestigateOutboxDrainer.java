@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +21,7 @@ import java.util.List;
  * Bridges the rules-worker → agent-worker JVM boundary via the shared DB outbox.
  */
 @Component
+@Profile("worker")
 public class InvestigateOutboxDrainer {
 
     private static final Logger log = LoggerFactory.getLogger(InvestigateOutboxDrainer.class);

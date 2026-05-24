@@ -127,13 +127,14 @@ services:
           memory: 512M
 
   # ── Worker (all pipeline beans: sftp poll, outbox drain, rules, agent) ───────
-  # One JVM handles the full pipeline. SftpWatcher connects to the sftp service
-  # over the network (JSch); no volume mount needed. @Async threads + the
-  # scheduled outbox drainers (500ms poll, FOR UPDATE SKIP LOCKED) handle
-  # concurrency internally. Scale horizontally only if throughput demands it.
+  # One JVM handles the full pipeline. All pipeline beans are gated by
+  # @Profile("worker") so they never start in the api container.
+  # SftpWatcher connects to the sftp service over the network (JSch); no volume
+  # mount needed. @Async threads + the scheduled outbox drainers (500ms poll,
+  # FOR UPDATE SKIP LOCKED) handle concurrency internally.
   worker:
     <<: *recon-common
-    command: ["--spring.profiles.active=watcher"]
+    command: ["--spring.profiles.active=worker"]
     depends_on:
       postgres:
         condition: service_healthy

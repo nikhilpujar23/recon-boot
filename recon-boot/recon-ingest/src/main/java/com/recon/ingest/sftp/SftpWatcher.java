@@ -30,7 +30,7 @@ import java.util.Vector;
  * Parses UDIR file and writes settlement_lines + outbox in one transaction.
  */
 @Component
-@Profile("watcher")
+@Profile("worker")
 public class SftpWatcher {
 
     private static final Logger log = LoggerFactory.getLogger(SftpWatcher.class);

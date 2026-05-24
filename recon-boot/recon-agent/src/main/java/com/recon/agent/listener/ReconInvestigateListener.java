@@ -4,12 +4,14 @@ import com.recon.agent.orchestrator.AgentOrchestrator;
 import com.recon.common.event.ReconInvestigateEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 @Component
+@Profile("worker")
 public class ReconInvestigateListener {
 
     private static final Logger log = LoggerFactory.getLogger(ReconInvestigateListener.class);

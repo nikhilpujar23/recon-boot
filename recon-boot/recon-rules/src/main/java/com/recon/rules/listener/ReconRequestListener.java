@@ -11,6 +11,7 @@ import com.recon.rules.engine.Rule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Component
+@Profile("worker")
 public class ReconRequestListener {
 
     private static final Logger log = LoggerFactory.getLogger(ReconRequestListener.class);
