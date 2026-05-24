@@ -29,7 +29,7 @@ public class AmountMismatchRule implements Rule {
         Optional<PgTransaction> txnOpt = txnRepo.findByRrn(line.rrn());
         if (txnOpt.isEmpty()) return RuleMatch.noMatch();
         PgTransaction txn = txnOpt.get();
-        if (statusesAgree(txn.status(), line.status()) && txn.amountPaise() != line.amountPaise()) {
+        if (txn.amountPaise() != line.amountPaise()) {
             return RuleMatch.of(MatchType.AMOUNT_MISMATCH, 0.5, txn.id());
         }
         return RuleMatch.noMatch();

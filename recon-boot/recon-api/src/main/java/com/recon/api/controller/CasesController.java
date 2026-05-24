@@ -92,7 +92,10 @@ public class CasesController {
                     ErrorResponse.of("STALE_RESOLUTION",
                             "Case is not in PROPOSED state or does not exist", requestId));
         }
-        eventPublisher.publishEvent(new CaseApprovedEvent(caseUid));
+        ReconCase reconCase = caseRepo.findByCaseUid(caseUid).orElse(null);
+        Long pgTxnId    = reconCase != null ? reconCase.pgTransactionId() : null;
+        String npciStatus = reconCase != null ? reconCase.npciStatus()    : null;
+        eventPublisher.publishEvent(new CaseApprovedEvent(caseUid, pgTxnId, npciStatus));
         return ResponseEntity.ok(Map.of("status", "APPROVED", "case_uid", caseUid));
     }
 

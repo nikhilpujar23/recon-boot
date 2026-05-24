@@ -13,6 +13,7 @@ public record ReconCase(
         Resolution resolution,
         BigDecimal confidence,
         String resolvedBy,
+        String npciStatus,
         Map<String, Object> notes,
         Instant createdAt,
         Instant updatedAt

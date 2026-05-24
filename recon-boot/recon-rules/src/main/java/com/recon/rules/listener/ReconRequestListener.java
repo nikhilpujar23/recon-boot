@@ -64,15 +64,15 @@ public class ReconRequestListener {
             switch (match.matchType()) {
                 case EXACT, TOLERANCE, DUPLICATE -> {
                     caseRepo.upsertAutoResolved(caseUid, line.id(), match.pgTransactionId(),
-                            match.matchType(), match.confidence());
-                    eventPublisher.publishEvent(new CaseApprovedEvent(caseUid));
+                            match.matchType(), match.confidence(), line.status());
+                    eventPublisher.publishEvent(new CaseApprovedEvent(caseUid, match.pgTransactionId(), line.status()));
                     log.info("AUTO_RESOLVED case_uid={} match={} conf={}",
                             caseUid, match.matchType(), match.confidence());
                 }
                 default -> {
                     // upsertPending atomically writes a 'recon.investigate' outbox row;
                     // agent-worker's InvestigateOutboxDrainer polls that row across the JVM boundary.
-                    caseRepo.upsertPending(caseUid, line.id(), match.matchType());
+                    caseRepo.upsertPending(caseUid, line.id(), match.matchType(), line.status());
                     log.info("ROUTED_TO_AGENT case_uid={} match={}", caseUid, match.matchType());
                 }
             }

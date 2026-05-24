@@ -14,12 +14,12 @@ import java.util.*;
  *
  * After the script is exhausted, returns end_turn with no content.
  */
-class ScriptedAnthropicClient extends GroqRestClient {
+class ScriptedGrokClient extends GroqRestClient {
 
     private final Deque<Map<String, Object>> steps;
     private final List<String> toolsInvoked = new ArrayList<>();
 
-    ScriptedAnthropicClient(List<Map<String, Object>> llmScript, ObjectMapper json) {
+    ScriptedGrokClient(List<Map<String, Object>> llmScript, ObjectMapper json) {
         super("", json, false);
         this.steps = new ArrayDeque<>(llmScript);
     }

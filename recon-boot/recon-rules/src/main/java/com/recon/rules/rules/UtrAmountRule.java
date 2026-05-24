@@ -31,7 +31,7 @@ public class UtrAmountRule implements Rule {
         Optional<PgTransaction> txnOpt = txnRepo.findByUtr(line.utr());
         if (txnOpt.isEmpty()) return RuleMatch.noMatch();
         PgTransaction txn = txnOpt.get();
-        if (statusesAgree(txn.status(), line.status()) && txn.amountPaise() == line.amountPaise()) {
+        if (txn.amountPaise() == line.amountPaise()) {
             // Require same calendar day (UTC) to avoid matching older transactions with same UTR
             LocalDate settlementDate = line.ingestedAt().atZone(ZoneOffset.UTC).toLocalDate();
             LocalDate txnDate = txn.createdAt().atZone(ZoneOffset.UTC).toLocalDate();

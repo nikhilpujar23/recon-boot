@@ -28,11 +28,11 @@ public class ReconCaseRepository {
 
     @Transactional
     public void upsertAutoResolved(String caseUid, long settlementLineId, Long pgTxnId,
-                                   MatchType matchType, BigDecimal confidence) {
+                                   MatchType matchType, BigDecimal confidence, String npciStatus) {
         jdbc.sql("""
                 INSERT INTO recon_cases
-                    (case_uid, settlement_line, pg_transaction, match_type, resolution, confidence, resolved_by)
-                VALUES (:uid, :slId, :txnId, :matchType, 'AUTO_RESOLVED', :confidence, 'rules')
+                    (case_uid, settlement_line, pg_transaction, match_type, resolution, confidence, resolved_by, npci_status)
+                VALUES (:uid, :slId, :txnId, :matchType, 'AUTO_RESOLVED', :confidence, 'rules', :npciStatus)
                 ON CONFLICT (case_uid) DO NOTHING
                 """)
                 .param("uid", UUID.fromString(caseUid))
@@ -40,20 +40,22 @@ public class ReconCaseRepository {
                 .param("txnId", pgTxnId)
                 .param("matchType", matchType.name())
                 .param("confidence", confidence)
+                .param("npciStatus", npciStatus)
                 .update();
     }
 
     @Transactional
-    public void upsertPending(String caseUid, long settlementLineId, MatchType matchType) {
+    public void upsertPending(String caseUid, long settlementLineId, MatchType matchType, String npciStatus) {
         int inserted = jdbc.sql("""
                 INSERT INTO recon_cases
-                    (case_uid, settlement_line, match_type, resolution)
-                VALUES (:uid, :slId, :matchType, 'PENDING')
+                    (case_uid, settlement_line, match_type, resolution, npci_status)
+                VALUES (:uid, :slId, :matchType, 'PENDING', :npciStatus)
                 ON CONFLICT (case_uid) DO NOTHING
                 """)
                 .param("uid", UUID.fromString(caseUid))
                 .param("slId", settlementLineId)
                 .param("matchType", matchType.name())
+                .param("npciStatus", npciStatus)
                 .update();
 
         // Atomically write the investigate outbox entry so agent-worker can poll
@@ -166,6 +168,7 @@ public class ReconCaseRepository {
                 resStr != null ? Resolution.valueOf(resStr) : null,
                 rs.getBigDecimal("confidence"),
                 rs.getString("resolved_by"),
+                rs.getString("npci_status"),
                 null,
                 rs.getTimestamp("created_at").toInstant(),
                 rs.getTimestamp("resolved_at") != null ? rs.getTimestamp("resolved_at").toInstant() : null

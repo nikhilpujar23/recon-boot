@@ -10,14 +10,4 @@ import java.util.Set;
 public interface Rule {
     RuleMatch evaluate(SettlementLine line, Set<String> seenRrns);
 
-    /** True if both sides agree on SUCCESS or FAILED. Any other/unrecognised status → false (route to agent). */
-    default boolean statusesAgree(TxnStatus pgStatus, String settlementStatus) {
-        if (settlementStatus == null) return false;
-        TxnStatus normalized = switch (settlementStatus.trim().toUpperCase()) {
-            case "SUCCESS" -> TxnStatus.SUCCESS;
-            case "FAILED", "FAILURE" -> TxnStatus.FAILED;
-            default -> null;
-        };
-        return normalized != null && normalized == pgStatus;
-    }
 }

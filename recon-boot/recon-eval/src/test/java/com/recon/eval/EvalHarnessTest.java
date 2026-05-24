@@ -131,7 +131,7 @@ class EvalHarnessTest {
      * Returns estimated cost USD (0.0 for mock runs).
      */
     private double runAgentCase(EvalCase ec) throws Exception {
-        ScriptedAnthropicClient mockLlm = new ScriptedAnthropicClient(ec.llmScript, JSON_MAPPER);
+        ScriptedGrokClient mockLlm = new ScriptedGrokClient(ec.llmScript, JSON_MAPPER);
 
         String resolvedType = null;
         int    steps        = 0;

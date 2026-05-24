@@ -1,10 +1,12 @@
 package com.recon.rules.engine;
 
+import com.recon.common.event.CaseApprovedEvent;
 import com.recon.common.model.*;
 import com.recon.common.util.CaseUid;
 import com.recon.ledger.repo.ReconCaseRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.HashSet;
@@ -24,10 +26,13 @@ public class RulesEngine {
 
     private final List<Rule> rules;
     private final ReconCaseRepository caseRepo;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public RulesEngine(List<Rule> rules, ReconCaseRepository caseRepo) {
+    public RulesEngine(List<Rule> rules, ReconCaseRepository caseRepo,
+                       ApplicationEventPublisher eventPublisher) {
         this.rules = rules;
         this.caseRepo = caseRepo;
+        this.eventPublisher = eventPublisher;
     }
 
     public RulesResult processFile(String fileId, List<SettlementLine> lines) {
@@ -44,12 +49,13 @@ public class RulesEngine {
             switch (match.matchType()) {
                 case EXACT, TOLERANCE, DUPLICATE -> {
                     caseRepo.upsertAutoResolved(caseUid, line.id(), match.pgTransactionId(),
-                            match.matchType(), match.confidence());
+                            match.matchType(), match.confidence(), line.status());
+                    eventPublisher.publishEvent(new CaseApprovedEvent(caseUid, match.pgTransactionId(), line.status()));
                     autoResolved++;
                     log.debug("AUTO_RESOLVED caseUid={} match={} conf={}", caseUid, match.matchType(), match.confidence());
                 }
                 default -> {
-                    caseRepo.upsertPending(caseUid, line.id(), match.matchType());
+                    caseRepo.upsertPending(caseUid, line.id(), match.matchType(), line.status());
                     pendingAgent++;
                     log.debug("PENDING_AGENT caseUid={} match={}", caseUid, match.matchType());
                 }

@@ -34,8 +34,7 @@ public class ToleranceRule implements Rule {
         List<PgTransaction> candidates = txnRepo.findByRrnAndAmountRange(line.rrn(), min, max);
         if (candidates.isEmpty()) return RuleMatch.noMatch();
         PgTransaction best = candidates.get(0);
-        if (statusesAgree(best.status(), line.status())
-                && Math.abs(best.amountPaise() - line.amountPaise()) <= tolerancePaise) {
+        if (Math.abs(best.amountPaise() - line.amountPaise()) <= tolerancePaise) {
             return RuleMatch.of(MatchType.TOLERANCE, 0.95, best.id());
         }
         return RuleMatch.noMatch();

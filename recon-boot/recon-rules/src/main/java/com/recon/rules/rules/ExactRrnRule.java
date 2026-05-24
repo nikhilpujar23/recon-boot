@@ -29,7 +29,7 @@ public class ExactRrnRule implements Rule {
         Optional<PgTransaction> txnOpt = txnRepo.findByRrn(line.rrn());
         if (txnOpt.isEmpty()) return RuleMatch.noMatch();
         PgTransaction txn = txnOpt.get();
-        if (statusesAgree(txn.status(), line.status()) && txn.amountPaise() == line.amountPaise()) {
+        if (txn.amountPaise() == line.amountPaise()) {
             return RuleMatch.of(MatchType.EXACT, 1.0, txn.id());
         }
         return RuleMatch.noMatch();
