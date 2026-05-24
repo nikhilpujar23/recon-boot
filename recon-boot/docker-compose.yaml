@@ -3,8 +3,7 @@
 #
 # Services:
 #   Infrastructure : postgres, sftp
-#   App workers    : outbox-drainer, ingest-worker, rules-worker
-#   API            : api
+#   App            : api (web + Flyway), worker (all pipeline beans in one JVM)
 #   Reverse proxy  : caddy
 #   Observability  : otel-collector, prometheus, grafana, tempo
 #
@@ -12,9 +11,9 @@
 #   cp .env.example .env          # fill in GROQ_API_KEY and PII keys
 #   docker compose up -d          # start everything
 #   docker compose exec postgres psql -U recon recon  # connect to DB
-#   docker compose logs -f ingest-worker rules-worker  # tail pipeline logs
+#   docker compose logs -f worker  # tail pipeline logs
 #
-# Drop a file into ./data/sftp/ and watch it flow through the pipeline.
+# Drop a .txt file into the SFTP drop zone and watch it flow through the pipeline.
 
 x-recon-common: &recon-common
   build:
@@ -127,10 +126,14 @@ services:
         limits:
           memory: 512M
 
-  # ── Outbox drainer ───────────────────────────────────────────────────────────
-  outbox-drainer:
+  # ── Worker (all pipeline beans: sftp poll, outbox drain, rules, agent) ───────
+  # One JVM handles the full pipeline. SftpWatcher connects to the sftp service
+  # over the network (JSch); no volume mount needed. @Async threads + the
+  # scheduled outbox drainers (500ms poll, FOR UPDATE SKIP LOCKED) handle
+  # concurrency internally. Scale horizontally only if throughput demands it.
+  worker:
     <<: *recon-common
-    command: ["workers", "outbox"]
+    command: ["--spring.profiles.active=watcher"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -142,7 +145,7 @@ services:
       SFTP_HOST: sftp
       SFTP_PORT: "2222"
       SPRING_FLYWAY_ENABLED: "false"
-      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "2"
       JAVA_TOOL_OPTIONS: >-
         -XX:+UseG1GC
         -XX:MaxRAMPercentage=65.0
@@ -153,123 +156,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
-
-  # ── Ingest worker (files.new → parser → settlement_lines) ───────────────────
-  ingest-worker:
-    <<: *recon-common
-    command: ["workers", "ingest", "--watch-dir", "/data/sftp"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      SFTP_HOST: sftp
-      SFTP_PORT: "2222"
-      SPRING_FLYWAY_ENABLED: "false"
-      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
-      JAVA_TOOL_OPTIONS: >-
-        -XX:+UseG1GC
-        -XX:MaxRAMPercentage=65.0
-        -XX:InitialRAMPercentage=30.0
-        -Dspring.main.web-application-type=none
-        -Dspring.main.lazy-initialization=true
-        -Dspring.jmx.enabled=false
-    volumes:
-      - sftp_data:/data/sftp:ro
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-
-  # ── Rules worker (recon.requests → rules engine → recon_cases) ──────────────
-  rules-worker:
-    <<: *recon-common
-    command: ["workers", "rules"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      SFTP_HOST: sftp
-      SFTP_PORT: "2222"
-      SPRING_FLYWAY_ENABLED: "false"
-      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
-      JAVA_TOOL_OPTIONS: >-
-        -XX:+UseG1GC
-        -XX:MaxRAMPercentage=65.0
-        -XX:InitialRAMPercentage=30.0
-        -Dspring.main.web-application-type=none
-        -Dspring.main.lazy-initialization=true
-        -Dspring.jmx.enabled=false
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-
-  # ── SFTP watcher (watches /data/sftp, emits FileArrived) ────────────────────
-  sftp-watcher:
-    <<: *recon-common
-    command: ["workers", "watcher", "--watch-dir", "/data/sftp", "--spring.profiles.active=watcher"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      SFTP_HOST: sftp
-      SFTP_PORT: "2222"
-      SPRING_FLYWAY_ENABLED: "false"
-      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
-      JAVA_TOOL_OPTIONS: >-
-        -XX:+UseG1GC
-        -XX:MaxRAMPercentage=65.0
-        -XX:InitialRAMPercentage=30.0
-        -Dspring.main.web-application-type=none
-        -Dspring.main.lazy-initialization=true
-        -Dspring.jmx.enabled=false
-    volumes:
-      - sftp_data:/data/sftp:ro
-    deploy:
-      resources:
-        limits:
-          memory: 384M
-
-  # ── Agent worker (investigate events → LLM investigation → recon_cases) ────────
-  agent-worker:
-    <<: *recon-common
-    command: ["workers", "agent"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: jdbc:postgresql://postgres:5432/recon
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      SFTP_HOST: sftp
-      SFTP_PORT: "2222"
-      SPRING_FLYWAY_ENABLED: "false"
-      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "1"
-      JAVA_TOOL_OPTIONS: >-
-        -XX:+UseG1GC
-        -XX:MaxRAMPercentage=65.0
-        -XX:InitialRAMPercentage=30.0
-        -Dspring.main.web-application-type=none
-        -Dspring.main.lazy-initialization=true
-        -Dspring.jmx.enabled=false
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+          memory: 768M
 
   # ── Caddy (reverse proxy + TLS termination) ──────────────────────────────────
   caddy:
@@ -366,7 +253,7 @@ services:
 
 volumes:
   postgres_data:
-  sftp_data:
+  sftp_data:      # SFTP server's upload directory; SftpWatcher reads via JSch over the network
   caddy_data:
   caddy_config:
   prometheus_data:

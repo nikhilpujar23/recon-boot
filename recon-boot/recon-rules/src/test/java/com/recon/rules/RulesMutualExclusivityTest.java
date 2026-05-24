@@ -25,8 +25,7 @@ class RulesMutualExclusivityTest {
                 new AppConfig.Rules(1),
                 new AppConfig.Pii("key", "key"),
                 new AppConfig.Api("token", 60),
-                new AppConfig.Retry(1.0, 3, 5.0, 25.0),
-                AppConfig.Rag.defaults()
+                new AppConfig.Retry(1.0, 3, 5.0, 25.0)
         );
     }
 
