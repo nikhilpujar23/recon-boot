@@ -21,7 +21,7 @@ class RulesMutualExclusivityTest {
     void setUp() {
         txnRepo = new StubPgTransactionRepository();
         config  = new AppConfig(
-                new AppConfig.Agent("haiku", "sonnet", 6, 30, true),
+                new AppConfig.Agent("haiku", "sonnet", 6, 30, true, 0),
                 new AppConfig.Rules(1),
                 new AppConfig.Pii("key", "key"),
                 new AppConfig.Api("token", 60),
@@ -51,13 +51,14 @@ class RulesMutualExclusivityTest {
     }
 
     @Test
-    void exactRrnRuleDoesNotMatchOnFailedStatus() {
+    void exactRrnRuleMatchesOnRrnAndAmountRegardlessOfStatus() {
         txnRepo.withByRrn(txn(1L, "RRN001", "UTR001", 10000L, TxnStatus.FAILED));
 
         Rule rule = new ExactRrnRule(txnRepo);
         RuleMatch m = rule.evaluate(line("RRN001", "UTR001", 10000L), new HashSet<>());
 
-        assertFalse(m.matched());
+        assertTrue(m.matched());
+        assertEquals(MatchType.EXACT, m.matchType());
     }
 
     @Test

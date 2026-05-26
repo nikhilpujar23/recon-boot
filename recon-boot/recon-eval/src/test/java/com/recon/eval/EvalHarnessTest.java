@@ -42,7 +42,7 @@ class EvalHarnessTest {
     @BeforeAll
     static void setup() {
         appConfig = new AppConfig(
-                new AppConfig.Agent("claude-haiku-4-5", "claude-sonnet-4-6", 6, 30, true),
+                new AppConfig.Agent("claude-haiku-4-5", "claude-sonnet-4-6", 6, 30, true, 0),
                 new AppConfig.Rules(1L),
                 new AppConfig.Pii("", ""),
                 new AppConfig.Api("changeme", 60),

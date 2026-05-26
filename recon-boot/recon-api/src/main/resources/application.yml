@@ -37,6 +37,7 @@ recon:
     max-steps: ${AGENT_MAX_STEPS:6}
     timeout-seconds: ${AGENT_TIMEOUT_S:30}
     mock-llm: ${MOCK_LLM:true}
+    inter-call-delay-ms: ${AGENT_INTER_CALL_DELAY_MS:8000}
   rules:
     tolerance-paise: ${RULES_TOLERANCE_PAISE:1}
   pii:

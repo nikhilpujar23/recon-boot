@@ -29,6 +29,9 @@
 #   Scenario C  [RULE ENGINE]  No RRN, UTR+amount same day   → EXACT / AUTO_RESOLVED
 #   Scenario D  [LLM AGENT]    RRN match, 200p amount gap    → AMOUNT_MISMATCH / agent decides
 #   Scenario E  [LLM AGENT]    No PG txn at all              → MISSING_LEG / agent decides
+#   Scenario F  [LLM AGENT]    Refund explains gap           → AMOUNT_MISMATCH / GetRefundsTool
+#   Scenario G  [LLM AGENT]    MDR fee explains gap          → AMOUNT_MISMATCH / GetMerchantFeeConfigTool
+#   Scenario H  [LLM AGENT]    Chargeback explains gap       → AMOUNT_MISMATCH / GetChargebackStatusTool
 #
 # Prerequisites:
 #   docker compose up -d
@@ -143,25 +146,71 @@ RRN_MISM="RRN_MISM_$TS"   ; UTR_MISM="UTR_MISM_$TS"     ; AMOUNT_MISM_PG=80000 ;
 #              No pg_txn for this RRN or UTR
 RRN_MISS="RRN_MISS_$TS"
 
+# Scenario F — AMOUNT_MISMATCH explained by a merchant-initiated refund
+#              PG=200000, settlement=120000; refund of 80000 explains the 80000p gap
+RRN_REFUND="RRN_REFUND_$TS" ; UTR_REFUND="UTR_REFUND_$TS" ; AMOUNT_REFUND_PG=200000 ; AMOUNT_REFUND_SETTLE=120000 ; REFUND_AMOUNT=80000
+
+# Scenario G — AMOUNT_MISMATCH explained by MDR + GST fee deduction
+#              PG=100000, MDR=0.9%=900p, GST on MDR=18%=162p → net=98938; settlement shows net
+#              MCC 5411 = grocery/supermarket (standard UPI P2M category)
+MERCHANT_MCC="5411"
+RRN_FEE="RRN_FEE_$TS"       ; UTR_FEE="UTR_FEE_$TS"       ; AMOUNT_FEE_PG=100000  ; AMOUNT_FEE_SETTLE=98938
+
+# Scenario H — AMOUNT_MISMATCH explained by a chargeback (partial clawback)
+#              PG=150000, chargeback=75000, settlement=75000
+RRN_CB="RRN_CB_$TS"         ; UTR_CB="UTR_CB_$TS"          ; AMOUNT_CB_PG=150000   ; AMOUNT_CB_SETTLE=75000  ; CB_AMOUNT=75000
+
 db "
-INSERT INTO pg_transactions (txn_id, rrn, utr, amount_paise, status, created_at, updated_at)
+INSERT INTO pg_transactions (txn_id, rrn, utr, amount_paise, status, created_at, updated_at, payee_vpa, txn_type, mcc)
 VALUES
-  ('TXN_EXACT_$TS', '$RRN_EXACT',  '$UTR_EXACT', $AMOUNT_EXACT,    'SUCCESS', now(), now()),
-  ('TXN_TOLE_$TS',  '$RRN_TOLE',   '$UTR_TOLE',  $AMOUNT_TOLE,     'SUCCESS', now(), now()),
-  ('TXN_UTR_$TS',   '$RRN_UTR_PG', '$UTR_UTR',   $AMOUNT_UTR,      'SUCCESS', now(), now()),
-  ('TXN_MISM_$TS',  '$RRN_MISM',   '$UTR_MISM',  $AMOUNT_MISM_PG,  'SUCCESS', now(), now())
+  ('TXN_EXACT_$TS',   '$RRN_EXACT',   '$UTR_EXACT',   $AMOUNT_EXACT,       'SUCCESS', now(), now(), null, null,   null),
+  ('TXN_TOLE_$TS',    '$RRN_TOLE',    '$UTR_TOLE',    $AMOUNT_TOLE,        'SUCCESS', now(), now(), null, null,   null),
+  ('TXN_UTR_$TS',     '$RRN_UTR_PG',  '$UTR_UTR',     $AMOUNT_UTR,         'SUCCESS', now(), now(), null, null,   null),
+  ('TXN_MISM_$TS',    '$RRN_MISM',    '$UTR_MISM',    $AMOUNT_MISM_PG,     'SUCCESS', now(), now(), null, null,   null),
+  ('TXN_REFUND_$TS',  '$RRN_REFUND',  '$UTR_REFUND',  $AMOUNT_REFUND_PG,   'SUCCESS', now(), now(), null, null,   null),
+  ('TXN_FEE_$TS',     '$RRN_FEE',     '$UTR_FEE',     $AMOUNT_FEE_PG,      'SUCCESS', now(), now(), null, 'P2M',  '$MERCHANT_MCC'),
+  ('TXN_CB_$TS',      '$RRN_CB',      '$UTR_CB',      $AMOUNT_CB_PG,       'SUCCESS', now(), now(), null, null,   null)
 ON CONFLICT DO NOTHING;
 " > /dev/null
-ok "seeded 4 pg_transactions"
+ok "seeded 7 pg_transactions"
 echo
-rule_tag "Scenario A → TXN_EXACT_$TS   RRN=$RRN_EXACT   amt=${AMOUNT_EXACT}p  (will match ExactRrnRule)"
-rule_tag "Scenario B → TXN_TOLE_$TS    RRN=$RRN_TOLE    amt=${AMOUNT_TOLE}p   (ToleranceRule, 1p tolerance)"
-rule_tag "Scenario C → TXN_UTR_$TS     UTR=$UTR_UTR     amt=${AMOUNT_UTR}p    (UtrAmountRule, no RRN in settlement)"
-llm_tag  "Scenario D → TXN_MISM_$TS    RRN=$RRN_MISM    pg=${AMOUNT_MISM_PG}p settle=${AMOUNT_MISM_SETTLE}p  (AmountMismatchRule → LLM)"
-llm_tag  "Scenario E → (no pg_txn)     RRN=$RRN_MISS                          (MissingLegRule → LLM)"
+rule_tag "Scenario A → TXN_EXACT_$TS    RRN=$RRN_EXACT    amt=${AMOUNT_EXACT}p   (ExactRrnRule)"
+rule_tag "Scenario B → TXN_TOLE_$TS     RRN=$RRN_TOLE     amt=${AMOUNT_TOLE}p    (ToleranceRule, 1p)"
+rule_tag "Scenario C → TXN_UTR_$TS      UTR=$UTR_UTR      amt=${AMOUNT_UTR}p     (UtrAmountRule)"
+llm_tag  "Scenario D → TXN_MISM_$TS     RRN=$RRN_MISM     pg=${AMOUNT_MISM_PG}p  settle=${AMOUNT_MISM_SETTLE}p  (AmountMismatch → LLM)"
+llm_tag  "Scenario E → (no pg_txn)      RRN=$RRN_MISS                             (MissingLeg → LLM)"
+llm_tag  "Scenario F → TXN_REFUND_$TS   RRN=$RRN_REFUND   pg=${AMOUNT_REFUND_PG}p settle=${AMOUNT_REFUND_SETTLE}p  (refund of ${REFUND_AMOUNT}p → LLM)"
+llm_tag  "Scenario G → TXN_FEE_$TS      RRN=$RRN_FEE      pg=${AMOUNT_FEE_PG}p   settle=${AMOUNT_FEE_SETTLE}p    (MDR+GST fee → LLM)"
+llm_tag  "Scenario H → TXN_CB_$TS       RRN=$RRN_CB       pg=${AMOUNT_CB_PG}p    settle=${AMOUNT_CB_SETTLE}p     (chargeback ${CB_AMOUNT}p → LLM)"
+
+# ── 2b. Seed supporting tables (refunds / merchant_fee_config / chargeback_events) ──
+sep "2b. Seeding refunds, merchant_fee_config, chargeback_events"
+
+db "
+INSERT INTO refunds (original_rrn, refund_id, amount_paise, status, reason, initiated_at, processed_at)
+VALUES ('$RRN_REFUND', 'REFUND_$TS', $REFUND_AMOUNT, 'SUCCESS',
+        'Customer requested partial refund', now() - interval '2 hours', now() - interval '1 hour')
+ON CONFLICT DO NOTHING;
+" > /dev/null
+ok "refund of ${REFUND_AMOUNT}p seeded for RRN=$RRN_REFUND"
+
+db "
+INSERT INTO merchant_fee_config (mcc, txn_type, mdr_rate, gst_applicable, effective_from)
+VALUES ('$MERCHANT_MCC', 'P2M', 0.0090, true, CURRENT_DATE - interval '30 days')
+ON CONFLICT (mcc, txn_type, effective_from) DO NOTHING;
+" > /dev/null
+ok "merchant_fee_config seeded for MCC=$MERCHANT_MCC (MDR=0.9%, GST applicable)"
+
+db "
+INSERT INTO chargeback_events (rrn, amount_paise, status, reason, processed_at)
+VALUES ('$RRN_CB', $CB_AMOUNT, 'ACCEPTED',
+        'Dispute raised by payer — partial chargeback accepted', now() - interval '3 hours')
+ON CONFLICT DO NOTHING;
+" > /dev/null
+ok "chargeback of ${CB_AMOUNT}p seeded for RRN=$RRN_CB"
 
 # ── 3. Generate UDIR settlement file ─────────────────────────────────────────
-sep "3. Generating UDIR settlement file (5 lines)"
+sep "3. Generating UDIR settlement file (8 lines)"
 
 TMPDIR_LOCAL=$(mktemp -d)
 FILE="$TMPDIR_LOCAL/udir_test_$TS.txt"
@@ -173,17 +222,20 @@ net()  { echo $(( $1 - $1 / 100 )); }
 AMOUNT_TOLE_SETTLE=$(( AMOUNT_TOLE + 1 ))        # 1p over → TOLERANCE
 
 cat > "$FILE" <<EOF
-HDR|UDIR_$TS|$(date +%Y%m%d)|5
+HDR|UDIR_$TS|$(date +%Y%m%d)|8
 $RRN_EXACT|$UTR_EXACT|$AMOUNT_EXACT|$(fee $AMOUNT_EXACT)|$(net $AMOUNT_EXACT)|SUCCESS
 $RRN_TOLE|$UTR_TOLE|$AMOUNT_TOLE_SETTLE|$(fee $AMOUNT_TOLE)|$(net $AMOUNT_TOLE)|SUCCESS
 RRN_NOPG_$TS|$UTR_UTR|$AMOUNT_UTR|$(fee $AMOUNT_UTR)|$(net $AMOUNT_UTR)|SUCCESS
 $RRN_MISM|$UTR_MISM|$AMOUNT_MISM_SETTLE|$(fee $AMOUNT_MISM_SETTLE)|$(net $AMOUNT_MISM_SETTLE)|SUCCESS
 $RRN_MISS|UTR_MISS_$TS|25000|250|24750|SUCCESS
-TRL|5
+$RRN_REFUND|$UTR_REFUND|$AMOUNT_REFUND_SETTLE|$(fee $AMOUNT_REFUND_SETTLE)|$(net $AMOUNT_REFUND_SETTLE)|SUCCESS
+$RRN_FEE|$UTR_FEE|$AMOUNT_FEE_SETTLE|$(fee $AMOUNT_FEE_SETTLE)|$(net $AMOUNT_FEE_SETTLE)|SUCCESS
+$RRN_CB|$UTR_CB|$AMOUNT_CB_SETTLE|$(fee $AMOUNT_CB_SETTLE)|$(net $AMOUNT_CB_SETTLE)|SUCCESS
+TRL|8
 EOF
 
 FILENAME=$(basename "$FILE")
-ok "generated $FILENAME (5 data lines)"
+ok "generated $FILENAME (8 data lines)"
 
 # ── 4. Drop file to SFTP ──────────────────────────────────────────────────────
 sep "4. Dropping file into SFTP upload directory"
@@ -199,17 +251,17 @@ sep "5. Waiting for SftpWatcher to ingest file (fixedDelay=5s)"
 
 ELAPSED=0
 FOUND_LINES=0
-ALL_RRNS="'$RRN_EXACT','$RRN_TOLE','RRN_NOPG_$TS','$RRN_MISM','$RRN_MISS'"
+ALL_RRNS="'$RRN_EXACT','$RRN_TOLE','RRN_NOPG_$TS','$RRN_MISM','$RRN_MISS','$RRN_REFUND','$RRN_FEE','$RRN_CB'"
 while [[ $ELAPSED -lt $MAX_WAIT ]]; do
   sleep $POLL_INTERVAL
   ELAPSED=$((ELAPSED + POLL_INTERVAL))
   FOUND_LINES=$(db "SELECT COUNT(*) FROM settlement_lines WHERE rrn IN ($ALL_RRNS)")
-  echo "  [${ELAPSED}s] settlement_lines found: $FOUND_LINES/5"
-  [[ "$FOUND_LINES" -eq 5 ]] && break
+  echo "  [${ELAPSED}s] settlement_lines found: $FOUND_LINES/8"
+  [[ "$FOUND_LINES" -eq 8 ]] && break
 done
 
-[[ "$FOUND_LINES" -eq 5 ]] && ok "all 5 settlement lines ingested" \
-  || { fail "timeout: only $FOUND_LINES/5 lines ingested after ${MAX_WAIT}s"; exit 1; }
+[[ "$FOUND_LINES" -eq 8 ]] && ok "all 8 settlement lines ingested" \
+  || { fail "timeout: only $FOUND_LINES/8 lines ingested after ${MAX_WAIT}s"; exit 1; }
 
 # ── 6. Wait: outbox drained ───────────────────────────────────────────────────
 sep "6. Waiting for OutboxDrainer to dispatch events (fixedDelay=500ms)"
@@ -231,11 +283,11 @@ FOUND_CASES=0
 while [[ $ELAPSED -lt 30 ]]; do
   sleep 2; ELAPSED=$((ELAPSED + 2))
   FOUND_CASES=$(db "SELECT COUNT(*) FROM recon_cases c JOIN settlement_lines s ON s.id = c.settlement_line WHERE s.rrn IN ($ALL_RRNS)")
-  echo "  [${ELAPSED}s] recon_cases created: $FOUND_CASES/5"
-  [[ "$FOUND_CASES" -eq 5 ]] && break
+  echo "  [${ELAPSED}s] recon_cases created: $FOUND_CASES/8"
+  [[ "$FOUND_CASES" -eq 8 ]] && break
 done
-[[ "$FOUND_CASES" -eq 5 ]] && ok "all 5 cases created" \
-  || { fail "timeout: only $FOUND_CASES/5 cases created after ${MAX_WAIT}s"; exit 1; }
+[[ "$FOUND_CASES" -eq 8 ]] && ok "all 8 cases created" \
+  || { fail "timeout: only $FOUND_CASES/8 cases created after ${MAX_WAIT}s"; exit 1; }
 
 # ── 8. Rule engine assertions ─────────────────────────────────────────────────
 sep "8. Rule engine assertions (cases auto-resolved without LLM)"
@@ -308,16 +360,41 @@ echo
 echo "  Rule 6 — MissingLegRule     : no pg_txn for this RRN or UTR"
 check_pending "$RRN_MISS" "MISSING_LEG"     "Scenario E"
 
+echo
+echo "  Rule 5 — AmountMismatchRule : refund of ${REFUND_AMOUNT}p explains ${AMOUNT_REFUND_PG}p vs ${AMOUNT_REFUND_SETTLE}p gap"
+check_pending "$RRN_REFUND" "AMOUNT_MISMATCH" "Scenario F"
+
+REFUND_COUNT=$(db "SELECT COUNT(*) FROM refunds WHERE original_rrn = '$RRN_REFUND' AND status = 'SUCCESS'")
+[[ "$REFUND_COUNT" -eq 1 ]] && ok "  refund record present for $RRN_REFUND" \
+  || fail "  refund record missing for $RRN_REFUND"
+
+echo
+echo "  Rule 5 — AmountMismatchRule : MDR+GST fee deduction explains ${AMOUNT_FEE_PG}p vs ${AMOUNT_FEE_SETTLE}p gap"
+check_pending "$RRN_FEE" "AMOUNT_MISMATCH" "Scenario G"
+
+FEE_COUNT=$(db "SELECT COUNT(*) FROM merchant_fee_config WHERE mcc = '$MERCHANT_MCC' AND effective_to IS NULL")
+[[ "$FEE_COUNT" -eq 1 ]] && ok "  merchant_fee_config present for MCC=$MERCHANT_MCC" \
+  || fail "  merchant_fee_config missing for MCC=$MERCHANT_MCC"
+
+echo
+echo "  Rule 5 — AmountMismatchRule : chargeback of ${CB_AMOUNT}p explains ${AMOUNT_CB_PG}p vs ${AMOUNT_CB_SETTLE}p gap"
+check_pending "$RRN_CB" "AMOUNT_MISMATCH" "Scenario H"
+
+CB_COUNT=$(db "SELECT COUNT(*) FROM chargeback_events WHERE rrn = '$RRN_CB' AND status = 'ACCEPTED'")
+[[ "$CB_COUNT" -eq 1 ]] && ok "  chargeback_event present for $RRN_CB" \
+  || fail "  chargeback_event missing for $RRN_CB"
+
 # ── 10. Wait: LLM agent completes investigation ───────────────────────────────
 sep "10. Waiting for LLM agent to investigate PENDING cases (MOCK_LLM=${MOCK_LLM:-?})"
 
-LLM_RRN_LIST="'$RRN_MISM','$RRN_MISS'"
+LLM_RRN_LIST="'$RRN_MISM','$RRN_MISS','$RRN_REFUND','$RRN_FEE','$RRN_CB'"
 ELAPSED=0
 LLM_RESOLVED=0
-LLM_WAIT=120   # agent timeout is 30s; allow headroom for both cases
+LLM_WAIT=240   # agent timeout is 30s per case; allow headroom for all 5 cases
 
-echo "  Agent will call: search_pg_transactions → get_settlement_history / get_chargeback_status"
-echo "                   → compute_fee_breakdown → propose_resolution (terminal)"
+echo "  Agent tools available: search_pg_transactions, get_settlement_history,"
+echo "                         get_refunds, get_merchant_fee_config,"
+echo "                         get_chargeback_status, propose_resolution (terminal)"
 echo
 
 while [[ $ELAPSED -lt $LLM_WAIT ]]; do
@@ -329,12 +406,12 @@ while [[ $ELAPSED -lt $LLM_WAIT ]]; do
     WHERE  s.rrn IN ($LLM_RRN_LIST)
     AND    c.resolution != 'PENDING'
   ")
-  echo "  [${ELAPSED}s] agent-resolved cases: $LLM_RESOLVED/2"
-  [[ "$LLM_RESOLVED" -eq 2 ]] && break
+  echo "  [${ELAPSED}s] agent-resolved cases: $LLM_RESOLVED/5"
+  [[ "$LLM_RESOLVED" -eq 5 ]] && break
 done
 
-[[ "$LLM_RESOLVED" -eq 2 ]] && ok "both LLM cases resolved within ${ELAPSED}s" \
-  || fail "timeout: only $LLM_RESOLVED/2 LLM cases resolved after ${LLM_WAIT}s"
+[[ "$LLM_RESOLVED" -eq 5 ]] && ok "all 5 LLM cases resolved within ${ELAPSED}s" \
+  || fail "timeout: only $LLM_RESOLVED/5 LLM cases resolved after ${LLM_WAIT}s"
 
 # ── 11. LLM agent investigation details ──────────────────────────────────────
 sep "11. LLM agent investigation trace"
@@ -427,8 +504,11 @@ except:
   fi
 }
 
-show_llm_trace "$RRN_MISM" "Scenario D" "AMOUNT_MISMATCH — PG ₹$(( AMOUNT_MISM_PG / 100 )) vs settlement ₹$(( AMOUNT_MISM_SETTLE / 100 ))"
-show_llm_trace "$RRN_MISS" "Scenario E" "MISSING_LEG — no PG transaction found"
+show_llm_trace "$RRN_MISM"   "Scenario D" "AMOUNT_MISMATCH — PG ₹$(( AMOUNT_MISM_PG / 100 )) vs settlement ₹$(( AMOUNT_MISM_SETTLE / 100 ))"
+show_llm_trace "$RRN_MISS"   "Scenario E" "MISSING_LEG — no PG transaction found"
+show_llm_trace "$RRN_REFUND" "Scenario F" "AMOUNT_MISMATCH — refund of ₹$(( REFUND_AMOUNT / 100 )) explains gap"
+show_llm_trace "$RRN_FEE"    "Scenario G" "AMOUNT_MISMATCH — MDR+GST fee explains ₹$(( (AMOUNT_FEE_PG - AMOUNT_FEE_SETTLE) / 100 )) gap"
+show_llm_trace "$RRN_CB"     "Scenario H" "AMOUNT_MISMATCH — chargeback of ₹$(( CB_AMOUNT / 100 )) explains gap"
 
 # ── 12. REST API: health ──────────────────────────────────────────────────────
 sep "12. REST: GET /healthz"
@@ -538,6 +618,9 @@ print_summary_row "$RRN_TOLE"     "Scenario B" "Rule 3: ToleranceRule"
 print_summary_row "RRN_NOPG_$TS" "Scenario C" "Rule 2: UtrAmountRule"
 print_summary_row "$RRN_MISM"     "Scenario D" "Rule 5 → LLM agent"
 print_summary_row "$RRN_MISS"     "Scenario E" "Rule 6 → LLM agent"
+print_summary_row "$RRN_REFUND"   "Scenario F" "Rule 5 → LLM (refund)"
+print_summary_row "$RRN_FEE"      "Scenario G" "Rule 5 → LLM (fee)"
+print_summary_row "$RRN_CB"       "Scenario H" "Rule 5 → LLM (chargeback)"
 echo "  └─────────────────────────────────────────────────────────────────────┘"
 
 echo

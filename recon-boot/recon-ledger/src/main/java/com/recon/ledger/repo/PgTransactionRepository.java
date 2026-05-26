@@ -20,6 +20,13 @@ public class PgTransactionRepository {
         this.jdbc = jdbc;
     }
 
+    public Optional<PgTransaction> findById(long id) {
+        return jdbc.sql("SELECT * FROM pg_transactions WHERE id = :id")
+                .param("id", id)
+                .query(this::map)
+                .optional();
+    }
+
     public Optional<PgTransaction> findByRrn(String rrn) {
         return jdbc.sql("SELECT * FROM pg_transactions WHERE rrn = :rrn")
                 .param("rrn", rrn)

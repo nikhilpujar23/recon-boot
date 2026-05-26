@@ -51,11 +51,11 @@ public class LangChainAgentConfig {
             SearchPgTransactionsTool searchTool,
             GetChargebackStatusTool chargebackTool,
             GetSettlementHistoryTool settlementTool,
-            ComputeFeeBreakdownTool feeTool,
-            ProposeResolutionTool proposeTool) {
+            ProposeResolutionTool proposeTool,
+            GetRefundsTool getRefundsTool) {
         return AiServices.builder(ReconInvestigateAgent.class)
                 .chatLanguageModel(chatLanguageModel)
-                .tools(searchTool, chargebackTool, settlementTool, feeTool, proposeTool)
+                .tools(searchTool, chargebackTool, settlementTool, getRefundsTool, proposeTool)
                 .build();
     }
 }

@@ -15,7 +15,8 @@ public record AppConfig(
             String modelInvest,
             int maxSteps,
             int timeoutSeconds,
-            boolean mockLlm
+            boolean mockLlm,
+            int interCallDelayMs
     ) {}
 
     public record Rules(

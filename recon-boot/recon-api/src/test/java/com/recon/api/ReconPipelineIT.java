@@ -164,7 +164,7 @@ class ReconPipelineIT {
         long slId  = seedSettlementLine(fileId, 1, rrn, "UTR_GUARD_001", amount);
         String uid = CaseUid.of(fileId, 1);
 
-        caseRepo.upsertPending(uid, slId, MatchType.AMOUNT_MISMATCH);
+        caseRepo.upsertPending(uid, slId, MatchType.AMOUNT_MISMATCH, null);
 
         boolean first = caseRepo.proposeResolution(
                 uid, Resolution.PROPOSED, BigDecimal.valueOf(0.92),

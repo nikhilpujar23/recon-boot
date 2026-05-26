@@ -1,0 +1,1 @@
+ALTER TABLE recon_cases ADD COLUMN IF NOT EXISTS npci_status TEXT;

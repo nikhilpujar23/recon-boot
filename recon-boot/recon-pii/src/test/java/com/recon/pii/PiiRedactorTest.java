@@ -19,7 +19,7 @@ class PiiRedactorTest {
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="   // 32-byte AES key (padded)
         );
         AppConfig config = new AppConfig(
-                new AppConfig.Agent("haiku", "sonnet", 6, 30, true),
+                new AppConfig.Agent("haiku", "sonnet", 6, 30, true, 0),
                 new AppConfig.Rules(1),
                 piiConfig,
                 new AppConfig.Api("test-token", 60),
