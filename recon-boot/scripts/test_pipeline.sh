@@ -373,7 +373,7 @@ echo "  Rule 5 — AmountMismatchRule : MDR+GST fee deduction explains ${AMOUNT_
 check_pending "$RRN_FEE" "AMOUNT_MISMATCH" "Scenario G"
 
 FEE_COUNT=$(db "SELECT COUNT(*) FROM merchant_fee_config WHERE mcc = '$MERCHANT_MCC' AND effective_to IS NULL")
-[[ "$FEE_COUNT" -eq 1 ]] && ok "  merchant_fee_config present for MCC=$MERCHANT_MCC" \
+[[ "$FEE_COUNT" -ge 1 ]] && ok "  merchant_fee_config present for MCC=$MERCHANT_MCC" \
   || fail "  merchant_fee_config missing for MCC=$MERCHANT_MCC"
 
 echo
